@@ -1,0 +1,5 @@
+Documentation
+QUICK_START.md - Get running in 5 minutes
+SUPABASE_SETUP.md - Detailed Supabase setup
+REALTIME_FEATURES.md - Feature documentation
+IMPLEMENTATION_COMPLETE.md - Complete overview
