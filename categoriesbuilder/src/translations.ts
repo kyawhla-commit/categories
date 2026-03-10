@@ -118,6 +118,12 @@ export const translations = {
     markAllRead: "Mark all read",
     notifications: "Notifications",
     noNotifs: "No notifications yet",
+    // Auth
+    login: "Sign In",
+    signUp: "Sign Up",
+    emailLabel: "Email",
+    passwordLabel: "Password",
+    teamManagement: "Team",
   },
   my: {
     welcomeTo: "မှကြိုဆိုပါသည်",
@@ -238,5 +244,11 @@ export const translations = {
     markAllRead: "အားလုံးဖတ်ပြီး",
     notifications: "အကြောင်းကြားချက်",
     noNotifs: "အကြောင်းကြားချက် မရှိသေးပါ",
+    // Auth
+    login: "ဝင်မည်",
+    signUp: "အကောင့်ဖွင့်မည်",
+    emailLabel: "အီးမေးလ်",
+    passwordLabel: "လျှို့ဝှက်နံပါတ်",
+    teamManagement: "အဖွဲ့",
   }
 };

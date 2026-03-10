@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
-import type { Category, MenuItem, Language, Brand, Table, Order, CartItem, ViewType, Staff, Notification } from './types';
-import { DEFAULT_BRAND, INITIAL_CATEGORIES, INITIAL_TABLES, DEFAULT_STAFF, ROLE_ACCESS } from './constants';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import type { Category, MenuItem, Language, Brand, Table, Order, CartItem, ViewType, Notification } from './types';
+import { DEFAULT_BRAND, INITIAL_CATEGORIES, INITIAL_TABLES, ROLE_ACCESS } from './constants';
 import { translations } from './translations';
 import { CategoryModal } from './components/CategoryModal';
 import { ItemModal } from './components/ItemModal';
@@ -11,9 +11,23 @@ import { QRCode } from './components/QRCode';
 import { BillModal } from './components/BillModal';
 import { KitchenDisplay } from './components/KitchenDisplay';
 import { Dashboard } from './components/Dashboard';
-import { LoginScreen } from './components/LoginScreen';
+import { AuthScreen } from './components/AuthScreen';
+import { StaffManagement } from './components/StaffManagement';
 import { NotificationBell } from './components/NotificationBell';
-import { supabase } from './lib/supabase';
+import { useAuth } from './contexts/AuthContext';
+import { 
+  supabase, 
+  signOut, 
+  fetchCategories, 
+  fetchMenuItems, 
+  fetchTables, 
+  upsertCategory, 
+  deleteCategory as dbDeleteCategory,
+  upsertMenuItem,
+  deleteMenuItem as dbDeleteMenuItem,
+  upsertTable,
+  deleteRestaurantTable as dbDeleteTable
+} from './lib/supabase';
 import { playOrderAlert } from './utils/sound';
 import './App.css';
 
@@ -26,11 +40,10 @@ const cardStyle: React.CSSProperties = {
 };
 
 function App() {
+  const { user, profile, loading: authLoading } = useAuth();
   const [lang, setLang] = useState<Language>("en");
   const [brand] = useState<Brand>(DEFAULT_BRAND);
   const [view, setView] = useState<ViewType>("login");
-  const [currentUser, setCurrentUser] = useState<Staff | null>(null);
-  const [staff] = useState<Staff[]>(DEFAULT_STAFF);
   const [categories, setCategories] = useState<Category[]>(INITIAL_CATEGORIES);
   const [tables, setTables] = useState<Table[]>(INITIAL_TABLES);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -40,6 +53,7 @@ function App() {
   const [orderPlaced, setOrderPlaced] = useState<Order | null>(null);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [soundOn, setSoundOn] = useState(true);
+  const [dataLoaded, setDataLoaded] = useState(false);
   const prevPendingCount = useRef(0);
   
   // Modals
@@ -55,27 +69,84 @@ function App() {
 
   // Check if user can access current view
   const canAccess = (v: ViewType) => {
-    if (!currentUser) return v === "login" || v === "menu";
+    if (!profile) return v === "login" || v === "menu";
     if (v === "menu" || v === "order-success") return true;
-    return ROLE_ACCESS[currentUser.role]?.includes(v) || false;
+    return ROLE_ACCESS[profile.role]?.includes(v) || false;
   };
+
+  // Load categories and tables from Supabase
+  const loadInitialData = useCallback(async () => {
+    try {
+      const { data: catsData } = await fetchCategories();
+      const { data: tblsData } = await fetchTables();
+      const { data: itemsData } = await fetchMenuItems();
+
+      if (catsData && itemsData) {
+        const enrichedCats: Category[] = catsData.map((c: any) => ({
+          id: c.id,
+          name: c.name,
+          nameMy: c.name_my || '',
+          icon: c.icon || '🍽️',
+          items: itemsData
+            .filter((i: any) => i.category_id === c.id)
+            .map((i: any) => ({
+              id: i.id,
+              name: i.name,
+              desc: i.description || '',
+              price: i.price,
+              image: i.image || '🍽️',
+              available: i.available
+            }))
+        }));
+        if (enrichedCats.length > 0) {
+          setCategories(enrichedCats);
+          setActiveCategory(enrichedCats[0].id);
+        }
+      }
+
+      if (tblsData) {
+        const mappedTables: Table[] = tblsData.map((t: any) => ({
+          id: t.id,
+          name: t.name,
+          desc: t.description || ''
+        }));
+        if (mappedTables.length > 0) {
+          setTables(mappedTables);
+          setSelectedTable(mappedTables[0].id);
+        }
+      }
+      setDataLoaded(true);
+    } catch (err) {
+      console.error('Error loading initial data:', err);
+    }
+  }, []);
 
   // Redirect if user doesn't have access
   useEffect(() => {
-    const checkAccess = () => {
-      if (!currentUser && view !== "login" && view !== "menu" && view !== "order-success") {
-        setView("login");
-      } else if (currentUser && view !== "menu" && view !== "order-success") {
-        const accessible = ROLE_ACCESS[currentUser.role];
-        if (accessible && !accessible.includes(view)) {
-          if (accessible.length > 0) {
-            setView(accessible[0]);
-          }
+    if (authLoading) return;
+    
+    if (!user && view !== "login" && view !== "menu" && view !== "order-success") {
+      setView("login");
+    } else if (profile && view === "login") {
+      const accessible = ROLE_ACCESS[profile.role];
+      if (accessible && accessible.length > 0) {
+        setView(accessible[0]);
+      } else {
+        setView("menu");
+      }
+    } else if (profile && view !== "menu" && view !== "order-success") {
+      const accessible = ROLE_ACCESS[profile.role];
+      if (accessible && !accessible.includes(view)) {
+        if (accessible.length > 0) {
+          setView(accessible[0]);
         }
       }
-    };
-    checkAccess();
-  }, [currentUser, view]);
+    }
+    
+    if (profile && !dataLoaded) {
+      loadInitialData();
+    }
+  }, [user, profile, authLoading, view, dataLoaded, loadInitialData]);
 
   // Load orders from Supabase
   const loadOrders = async () => {
@@ -90,13 +161,15 @@ function App() {
     }
 
     if (data) {
-      const loadedOrders: Order[] = data.map((row: { id: number; table_id: number; items: unknown; total: number; time: string; status: string }) => ({
+      const loadedOrders: Order[] = data.map((row: any) => ({
         id: row.id,
         table: row.table_id,
         items: row.items as CartItem[],
         total: row.total,
         time: row.time,
-        status: row.status as Order['status']
+        status: row.status as Order['status'],
+        created_by: row.created_by,
+        created_at: row.created_at
       }));
       setOrders(loadedOrders);
     }
@@ -108,14 +181,16 @@ function App() {
     const channel = supabase
       .channel('orders')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'orders' }, (payload) => {
-        const newOrder = payload.new as { id: number; table_id: number; items: unknown; total: number; time: string; status: string };
+        const newOrder = payload.new as any;
         const order: Order = {
           id: newOrder.id,
           table: newOrder.table_id,
           items: newOrder.items as CartItem[],
           total: newOrder.total,
           time: newOrder.time,
-          status: newOrder.status as Order['status']
+          status: newOrder.status as Order['status'],
+          created_by: newOrder.created_by,
+          created_at: newOrder.created_at
         };
         setOrders((prev) => [order, ...prev]);
       })
@@ -163,16 +238,12 @@ function App() {
 
   const getCatName = (cat: Category) => lang === "my" && cat.nameMy ? cat.nameMy : cat.name;
 
-  const handleLogin = (user: Staff) => {
-    setCurrentUser(user);
-    const accessible = ROLE_ACCESS[user.role];
-    if (accessible && accessible.length > 0) {
-      setView(accessible[0]);
-    }
+  const handleAuthSuccess = () => {
+    // Auth state changes are handled by the useEffect above
   };
 
-  const handleLogout = () => {
-    setCurrentUser(null);
+  const handleLogout = async () => {
+    await signOut();
     setView("login");
   };
 
@@ -224,31 +295,53 @@ function App() {
   };
 
   // Mark table as paid
-  const markTablePaid = (tableId: number) => {
+  const markTablePaid = async (tableId: number) => {
+    const tableOrders = orders.filter((o) => o.table === tableId && o.status === "served");
+    
+    // Update all served orders for this table to paid
+    const updates = tableOrders.map(o => 
+      supabase.from('orders').update({ status: 'paid' }).eq('id', o.id)
+    );
+
+    await Promise.all(updates);
+    
     setOrders((p) => p.map((o) => (o.table === tableId && o.status === "served" ? { ...o, status: "paid" } : o)));
     setBillModal(null);
     showToast("Payment recorded! 💳");
   };
 
   // Category handlers
-  const saveCat = (form: Partial<Category>) => {
-    if (form.id) {
-      setCategories((p) => p.map((c) => (c.id === form.id ? { ...c, ...form } as Category : c)));
+  const saveCat = async (form: Partial<Category>) => {
+    const { error } = await upsertCategory({
+      id: form.id || 'cat-' + Date.now(),
+      name: form.name || '',
+      name_my: form.nameMy || '',
+      icon: form.icon || '🍽️',
+      sort_order: categories.length + 1
+    });
+
+    if (error) {
+      showToast("Error saving category: " + error.message, "error");
     } else {
-      setCategories((p) => [...p, { ...form, id: "cat-" + Date.now(), items: [] } as Category]);
+      await loadInitialData();
+      setCatModal(null);
+      showToast("Category saved!");
     }
-    setCatModal(null);
-    showToast("Category saved!");
   };
 
   const deleteCat = (id: string) => {
     const cat = categories.find((c) => c.id === id);
     setConfirmModal({
       msg: cat && cat.items.length > 0 ? t.catHasItems : t.confirmDelete,
-      onConfirm: () => {
-        setCategories((p) => p.filter((c) => c.id !== id));
-        setConfirmModal(null);
-        showToast("Deleted", "error");
+      onConfirm: async () => {
+        const { error } = await dbDeleteCategory(id);
+        if (error) {
+          showToast("Error deleting: " + error.message, "error");
+        } else {
+          await loadInitialData();
+          setConfirmModal(null);
+          showToast("Deleted", "error");
+        }
       }
     });
   };
@@ -264,60 +357,85 @@ function App() {
   };
 
   // Item handlers
-  const saveItem = (catId: string, item: Partial<MenuItem>) => {
-    setCategories((p) =>
-      p.map((cat) =>
-        cat.id === catId
-          ? {
-              ...cat,
-              items: item.id
-                ? cat.items.map((i) => (i.id === item.id ? item as MenuItem : i))
-                : [...cat.items, { ...item, id: Date.now() } as MenuItem]
-            }
-          : cat
-      )
-    );
-    setItemModal(null);
-    showToast("Item saved!");
+  const saveItem = async (catId: string, item: Partial<MenuItem>) => {
+    const { error } = await upsertMenuItem({
+      id: item.id,
+      category_id: catId,
+      name: item.name || '',
+      description: item.desc || '',
+      price: item.price || 0,
+      image: item.image || '🍽️',
+      available: item.available ?? true,
+      sort_order: 0
+    });
+
+    if (error) {
+      showToast("Error saving item: " + error.message, "error");
+    } else {
+      await loadInitialData();
+      setItemModal(null);
+      showToast("Item saved!");
+    }
   };
 
-  const deleteItem = (catId: string, itemId: number) => {
-    setCategories((p) =>
-      p.map((cat) =>
-        cat.id === catId ? { ...cat, items: cat.items.filter((i) => i.id !== itemId) } : cat
-      )
-    );
-    showToast("Deleted", "error");
+  const deleteItem = async (catId: string, itemId: number) => {
+    const { error } = await dbDeleteMenuItem(itemId);
+    if (error) {
+      showToast("Error deleting item: " + error.message, "error");
+    } else {
+      await loadInitialData();
+      showToast("Deleted", "error");
+    }
   };
 
-  const toggleAvail = (catId: string, itemId: number) => {
-    setCategories((p) =>
-      p.map((cat) =>
-        cat.id === catId
-          ? { ...cat, items: cat.items.map((i) => (i.id === itemId ? { ...i, available: !i.available } : i)) }
-          : cat
-      )
-    );
+  const toggleAvail = async (catId: string, itemId: number) => {
+    const cat = categories.find(c => c.id === catId);
+    const item = cat?.items.find(i => i.id === itemId);
+    if (!item) return;
+
+    const { error } = await upsertMenuItem({
+      ...item,
+      id: item.id,
+      category_id: catId,
+      name: item.name,
+      description: item.desc,
+      available: !item.available
+    });
+
+    if (!error) {
+      await loadInitialData();
+    }
   };
 
   // Table handlers
-  const saveTable = (form: Partial<Table>) => {
-    if (form.id) {
-      setTables((p) => p.map((t) => (t.id === form.id ? { ...t, ...form } as Table : t)));
+  const saveTable = async (form: Partial<Table>) => {
+    const { error } = await upsertTable({
+      id: form.id,
+      name: form.name || '',
+      description: form.desc || ''
+    });
+
+    if (error) {
+      showToast("Error saving table: " + error.message, "error");
     } else {
-      setTables((p) => [...p, { ...form, id: Date.now() } as Table]);
+      await loadInitialData();
+      setTableModal(null);
+      showToast("Table saved!");
     }
-    setTableModal(null);
-    showToast("Table saved!");
   };
 
   const deleteTable = (id: number) => {
     setConfirmModal({
       msg: t.confirmDelete,
-      onConfirm: () => {
-        setTables((p) => p.filter((t) => t.id !== id));
-        setConfirmModal(null);
-        showToast("Deleted", "error");
+      onConfirm: async () => {
+        const { error } = await dbDeleteTable(id);
+        if (error) {
+          showToast("Error deleting table: " + error.message, "error");
+        } else {
+          await loadInitialData();
+          setConfirmModal(null);
+          showToast("Deleted", "error");
+        }
       }
     });
   };
@@ -347,25 +465,19 @@ function App() {
 
   // Order handlers
   const placeOrder = async () => {
-    const order: Order = {
-      id: Date.now(),
-      table: selectedTable,
+    const order = {
+      table_id: selectedTable,
       items: cart,
       total: cartTotal,
       time: new Date().toLocaleTimeString(),
-      status: "pending"
+      status: "pending",
+      created_by: user?.id || null
     };
 
     // Save to Supabase
     const { data, error } = await supabase
       .from('orders')
-      .insert({
-        table_id: order.table,
-        items: order.items,
-        total: order.total,
-        time: order.time,
-        status: order.status
-      })
+      .insert(order)
       .select()
       .single();
 
@@ -379,10 +491,12 @@ function App() {
       const savedOrder: Order = {
         id: data.id,
         table: data.table_id,
-        items: data.items,
+        items: data.items as CartItem[],
         total: data.total,
         time: data.time,
-        status: data.status
+        status: data.status as Order['status'],
+        created_by: data.created_by,
+        created_at: data.created_at
       };
       setOrders((p) => [savedOrder, ...p]);
       setOrderPlaced(savedOrder);
@@ -438,11 +552,10 @@ function App() {
       `}</style>
 
       {view === "login" && (
-        <LoginScreen
-          staff={staff}
+        <AuthScreen
           brand={brand}
-          onLogin={handleLogin}
           translations={t}
+          onAuthSuccess={handleAuthSuccess}
         />
       )}
 
@@ -622,6 +735,23 @@ function App() {
               {t.dashboardTab}
             </button>
           )}
+          {canAccess("staff_mgmt") && (
+            <button
+              onClick={() => setView("staff_mgmt")}
+              style={{
+                padding: "5px 12px",
+                borderRadius: 20,
+                border: "none",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: 600,
+                background: view === "staff_mgmt" ? "white" : "transparent",
+                color: view === "staff_mgmt" ? brand.primary : "rgba(255,255,255,0.6)"
+              }}
+            >
+              {t.teamManagement}
+            </button>
+          )}
           <NotificationBell
             notifications={notifications}
             soundOn={soundOn}
@@ -645,13 +775,13 @@ function App() {
           >
             {lang === "en" ? "🇲🇲" : "🇬🇧"}
           </button>
-          {currentUser && (
+          {profile && (
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4, padding: "4px 10px", borderRadius: 20, background: "rgba(255,255,255,0.08)" }}>
               <span style={{ fontSize: 13 }}>
-                {currentUser.role === "admin" ? "👑" : currentUser.role === "kitchen" ? "👨‍🍳" : currentUser.role === "cashier" ? "💳" : "🙋"}
+                {profile.role === "admin" ? "👑" : profile.role === "kitchen" ? "👨‍🍳" : profile.role === "cashier" ? "💳" : "🙋"}
               </span>
               <span style={{ color: "rgba(255,255,255,0.8)", fontSize: 12, fontWeight: 600, maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {currentUser.name.split(" ")[0]}
+                {(profile.full_name || 'User').split(" ")[0]}
               </span>
               <button
                 onClick={handleLogout}
@@ -685,6 +815,14 @@ function App() {
           orders={orders}
           brand={brand}
           translations={t}
+        />
+      )}
+
+      {view === "staff_mgmt" && (
+        <StaffManagement
+          brand={brand}
+          translations={t}
+          currentProfile={profile}
         />
       )}
 

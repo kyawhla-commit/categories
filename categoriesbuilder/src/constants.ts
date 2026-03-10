@@ -1,4 +1,4 @@
-import type { Brand, Category, Table, Staff, ViewType } from './types';
+import type { Brand, Category, Table, UserProfile, ViewType } from './types';
 
 export const DEFAULT_BRAND: Brand = {
   name: "La Bella Cucina",
@@ -9,18 +9,11 @@ export const DEFAULT_BRAND: Brand = {
   accentDark: "#a07840"
 };
 
-export const DEFAULT_STAFF: Staff[] = [
-  { id: 1, name: "Admin", pin: "0000", role: "admin" },
-  { id: 2, name: "Marco (Waiter)", pin: "1111", role: "waiter" },
-  { id: 3, name: "Chef Luigi", pin: "2222", role: "kitchen" },
-  { id: 4, name: "Sara (Cashier)", pin: "3333", role: "cashier" },
-];
-
-export const ROLE_ACCESS: Record<Staff['role'], ViewType[]> = {
-  admin: ["admin", "kitchen", "dashboard", "menu"],
+export const ROLE_ACCESS: Record<UserProfile['role'], ViewType[]> = {
+  admin: ["admin", "kitchen", "dashboard", "menu", "staff_mgmt"],
   waiter: ["menu"],
   kitchen: ["kitchen"],
-  cashier: ["admin", "dashboard"]
+  cashier: ["admin", "dashboard", "staff_mgmt"]
 };
 
 export const INITIAL_TABLES: Table[] = [

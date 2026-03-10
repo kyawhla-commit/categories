@@ -32,6 +32,8 @@ export interface Order {
   total: number;
   time: string;
   status: 'pending' | 'accepted' | 'served' | 'paid';
+  created_by?: string;
+  created_at?: string;
 }
 
 export interface Brand {
@@ -57,6 +59,15 @@ export interface Notification {
   read: boolean;
 }
 
+export interface UserProfile {
+  id: string;
+  full_name: string;
+  role: 'admin' | 'waiter' | 'kitchen' | 'cashier';
+  avatar_url?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export type Language = 'en' | 'my';
 
-export type ViewType = 'admin' | 'menu' | 'order-success' | 'kitchen' | 'dashboard' | 'login';
+export type ViewType = 'admin' | 'menu' | 'order-success' | 'kitchen' | 'dashboard' | 'login' | 'staff_mgmt';
