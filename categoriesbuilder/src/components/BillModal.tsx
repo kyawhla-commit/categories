@@ -1,6 +1,6 @@
 import React from 'react';
 import { Modal } from './Modal';
-import type { Order, Table, Brand } from '../types';
+import type { Order, Brand } from '../types';
 
 interface BillModalProps {
   tableOrders: Order[];

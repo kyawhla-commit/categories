@@ -30,7 +30,7 @@ export const QRModal: React.FC<QRModalProps> = ({ table, onClose, translations: 
             marginBottom: 12
           }}
         >
-          <QRCode tableNum={table.name} size={160} />
+          <QRCode tableId={table.id} size={160} />
         </div>
         <p style={{ fontSize: 11, color: "#bbb", marginBottom: 16 }}>{t.printTable}</p>
         <button

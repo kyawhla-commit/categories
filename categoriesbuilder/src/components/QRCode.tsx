@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 
 interface QRCodeProps {
-  tableNum: string | number;
+  tableId: string | number;
   size?: number;
 }
 
@@ -38,7 +38,7 @@ function loadQRLib(cb: () => void) {
   document.head.appendChild(script);
 }
 
-export const QRCode: React.FC<QRCodeProps> = ({ tableNum, size = 120 }) => {
+export const QRCode: React.FC<QRCodeProps> = ({ tableId, size = 120 }) => {
   const divRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -46,12 +46,14 @@ export const QRCode: React.FC<QRCodeProps> = ({ tableNum, size = 120 }) => {
     if (!el) return;
 
     el.innerHTML = "";
+    const qrValue = `${window.location.origin}${window.location.pathname}?table=${encodeURIComponent(String(tableId))}`;
+
     loadQRLib(() => {
       const QRCodeLib = window.QRCode;
       if (QRCodeLib) {
         try {
           new QRCodeLib(el, {
-            text: "TABLE-" + String(tableNum),
+            text: qrValue,
             width: size,
             height: size,
             colorDark: "#000000",
@@ -63,7 +65,7 @@ export const QRCode: React.FC<QRCodeProps> = ({ tableNum, size = 120 }) => {
         }
       }
     });
-  }, [tableNum, size]);
+  }, [tableId, size]);
 
   return <div ref={divRef} style={{ width: size, height: size }} />;
 };

@@ -2,18 +2,20 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import type { Category, MenuItem, Language, Brand, Table, Order, CartItem, ViewType, Notification } from './types';
 import { DEFAULT_BRAND, INITIAL_CATEGORIES, INITIAL_TABLES, ROLE_ACCESS } from './constants';
 import { translations } from './translations';
-import { CategoryModal } from './components/CategoryModal';
-import { ItemModal } from './components/ItemModal';
+import { CategoryModalShadcn } from './components/CategoryModalShadcn';
+import { ItemModalShadcn } from './components/ItemModalShadcn';
 import { ConfirmModal } from './components/ConfirmModal';
-import { TableModal } from './components/TableModal';
+import { TableModalShadcn } from './components/TableModalShadcn';
 import { QRModal } from './components/QRModal';
 import { QRCode } from './components/QRCode';
 import { BillModal } from './components/BillModal';
 import { KitchenDisplay } from './components/KitchenDisplay';
 import { Dashboard } from './components/Dashboard';
-import { AuthScreen } from './components/AuthScreen';
+import { AuthScreenShadcn } from './components/AuthScreenShadcn';
 import { StaffManagement } from './components/StaffManagement';
-import { NotificationBell } from './components/NotificationBell';
+import { NotificationBellShadcn } from './components/NotificationBellShadcn';
+import { Badge } from './components/ui/badge';
+import { Card, CardContent } from './components/ui/card';
 import { useAuth } from './contexts/AuthContext';
 import { 
   supabase, 
@@ -37,6 +39,34 @@ const cardStyle: React.CSSProperties = {
   background: "white",
   borderRadius: 12,
   boxShadow: "0 2px 12px rgba(0,0,0,0.06)"
+};
+
+const VIEW_META: Partial<Record<ViewType, { eyebrow: string; title: string; description: string }>> = {
+  menu: {
+    eyebrow: 'Customer Ordering',
+    title: 'Menu',
+    description: 'Browse categories, build a cart, and place orders by table.',
+  },
+  admin: {
+    eyebrow: 'Operations',
+    title: 'Admin',
+    description: 'Manage categories, menu items, tables, and active orders.',
+  },
+  kitchen: {
+    eyebrow: 'Back Of House',
+    title: 'Kitchen',
+    description: 'Track incoming orders and move them through service quickly.',
+  },
+  dashboard: {
+    eyebrow: 'Reporting',
+    title: 'Dashboard',
+    description: 'Review revenue, order trends, and top-performing items.',
+  },
+  staff_mgmt: {
+    eyebrow: 'Team',
+    title: 'Staff Management',
+    description: 'Review staff accounts and adjust access roles.',
+  },
 };
 
 function App() {
@@ -66,6 +96,10 @@ function App() {
   const [toast, setToast] = useState<{ msg: string; type: string } | null>(null);
 
   const t = translations[lang];
+  const scannedTableId = typeof window !== 'undefined'
+    ? Number(new URLSearchParams(window.location.search).get('table'))
+    : NaN;
+  const isCustomerEntry = Number.isFinite(scannedTableId);
 
   // Check if user can access current view
   const canAccess = (v: ViewType) => {
@@ -125,8 +159,14 @@ function App() {
   useEffect(() => {
     if (authLoading) return;
     
-    if (!user && view !== "login" && view !== "menu" && view !== "order-success") {
+    if (!user && isCustomerEntry && view === "login") {
+      setView("menu");
+    } else if (!user && !isCustomerEntry && view !== "login") {
       setView("login");
+    } else if (!user && isCustomerEntry && view !== "menu" && view !== "order-success" && view !== "login") {
+      setView("menu");
+    } else if (user && !profile && view === "login") {
+      setView("menu");
     } else if (profile && view === "login") {
       const accessible = ROLE_ACCESS[profile.role];
       if (accessible && accessible.length > 0) {
@@ -146,7 +186,21 @@ function App() {
     if (profile && !dataLoaded) {
       loadInitialData();
     }
-  }, [user, profile, authLoading, view, dataLoaded, loadInitialData]);
+  }, [user, profile, authLoading, view, dataLoaded, loadInitialData, isCustomerEntry]);
+
+  useEffect(() => {
+    if (!isCustomerEntry || tables.length === 0) {
+      return;
+    }
+
+    const matchedTable = tables.find((tb) => tb.id === scannedTableId);
+    if (!matchedTable) {
+      return;
+    }
+
+    setSelectedTable(matchedTable.id);
+    setView("menu");
+  }, [isCustomerEntry, scannedTableId, tables]);
 
   // Load orders from Supabase
   const loadOrders = async () => {
@@ -238,12 +292,26 @@ function App() {
 
   const getCatName = (cat: Category) => lang === "my" && cat.nameMy ? cat.nameMy : cat.name;
 
-  const handleAuthSuccess = () => {
-    // Auth state changes are handled by the useEffect above
+  const handleAuthSuccess = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.user) {
+      setView("menu");
+    }
   };
 
   const handleLogout = async () => {
     await signOut();
+    setNotifications([]);
+    setOrderPlaced(null);
+    setCart([]);
+    setConfirmModal(null);
+    setCatModal(null);
+    setItemModal(null);
+    setTableModal(null);
+    setQrModal(null);
+    setBillModal(null);
+    setToast(null);
+    setDataLoaded(false);
     setView("login");
   };
 
@@ -378,7 +446,7 @@ function App() {
     }
   };
 
-  const deleteItem = async (catId: string, itemId: number) => {
+  const deleteItem = async (itemId: number) => {
     const { error } = await dbDeleteMenuItem(itemId);
     if (error) {
       showToast("Error deleting item: " + error.message, "error");
@@ -542,8 +610,19 @@ function App() {
     paid: { label: t.paid, bg: "#dcfce7", color: "#166534", dot: "#22c55e" }
   };
 
+  const navItems = [
+    canAccess("admin") ? { view: "admin" as ViewType, label: t.adminTab } : null,
+    { view: "menu" as ViewType, label: t.menuTab },
+    canAccess("kitchen") ? { view: "kitchen" as ViewType, label: t.kitchenTab } : null,
+    canAccess("dashboard") ? { view: "dashboard" as ViewType, label: t.dashboardTab } : null,
+    canAccess("staff_mgmt") ? { view: "staff_mgmt" as ViewType, label: t.teamManagement } : null,
+  ].filter(Boolean) as Array<{ view: ViewType; label: string }>;
+
+  const currentViewMeta = VIEW_META[view];
+  const activeViewLabel = navItems.find((item) => item.view === view)?.label ?? currentViewMeta?.title ?? view;
+
   return (
-    <div style={{ fontFamily: "system-ui,'Noto Sans Myanmar',sans-serif", minHeight: "100vh", background: "#faf8f4" }}>
+    <div className="app-shell" style={{ fontFamily: "system-ui,'Noto Sans Myanmar',sans-serif" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Myanmar:wght@400;700&display=swap');
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -551,15 +630,32 @@ function App() {
         ::-webkit-scrollbar-thumb { background: ${brand.accent}; border-radius: 3px; }
       `}</style>
 
-      {view === "login" && (
-        <AuthScreen
+      {authLoading && (
+        <div className="flex min-h-screen items-center justify-center px-6">
+          <Card className="w-full max-w-sm border-slate-200 bg-white">
+            <CardContent className="flex flex-col items-center gap-3 p-8 text-center">
+              <div
+                className="flex h-14 w-14 items-center justify-center rounded-full text-3xl"
+                style={{ background: `${brand.accent}22` }}
+              >
+                {brand.logo}
+              </div>
+              <p className="font-serif text-xl font-bold text-slate-900">Restoring workspace</p>
+              <p className="text-sm text-slate-500">Checking your session and loading the latest restaurant data.</p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {!authLoading && view === "login" && (
+        <AuthScreenShadcn
           brand={brand}
           translations={t}
           onAuthSuccess={handleAuthSuccess}
         />
       )}
 
-      {view !== "login" && (
+      {!authLoading && view !== "login" && (
         <>
           {toast && (
         <div
@@ -593,7 +689,7 @@ function App() {
       )}
 
       {catModal !== null && (
-        <CategoryModal
+        <CategoryModalShadcn
           category={catModal}
           onSave={saveCat}
           onClose={() => setCatModal(null)}
@@ -602,7 +698,7 @@ function App() {
       )}
 
       {itemModal && (
-        <ItemModal
+        <ItemModalShadcn
           item={itemModal.item}
           onSave={(item) => saveItem(itemModal.catId, item)}
           onClose={() => setItemModal(null)}
@@ -611,7 +707,7 @@ function App() {
       )}
 
       {tableModal !== null && (
-        <TableModal
+        <TableModalShadcn
           table={tableModal}
           onSave={saveTable}
           onClose={() => setTableModal(null)}
@@ -752,7 +848,7 @@ function App() {
               {t.teamManagement}
             </button>
           )}
-          <NotificationBell
+          <NotificationBellShadcn
             notifications={notifications}
             soundOn={soundOn}
             onToggleSound={() => setSoundOn((s) => !s)}
@@ -800,30 +896,66 @@ function App() {
         </div>
       </nav>
 
+      <main className="mx-auto max-w-[1380px] px-4 py-6 lg:px-6">
+        {currentViewMeta && view !== "order-success" && (
+          <Card className="mb-6 border-slate-200 bg-white/90 shadow-[0_12px_32px_rgba(15,23,42,0.08)]">
+            <CardContent className="flex flex-col gap-3 p-6 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.28em]" style={{ color: brand.accentDark }}>
+                  {currentViewMeta.eyebrow}
+                </p>
+                <h1 className="mt-2 font-serif text-3xl font-bold text-slate-900">{currentViewMeta.title}</h1>
+                <p className="mt-2 max-w-2xl text-sm text-slate-500">{currentViewMeta.description}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {profile && (
+                  <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-800">
+                    {profile.role}
+                  </Badge>
+                )}
+                <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-700">
+                  {activeViewLabel}
+                </Badge>
+                {view === "menu" && (
+                  <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-700">
+                    {t.tableLabel} {tables.find((tb) => tb.id === selectedTable)?.name || selectedTable}
+                  </Badge>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
       {view === "kitchen" && (
-        <KitchenDisplay
-          orders={orders}
-          tables={tables}
-          onUpdateStatus={updateOrderStatus}
-          brand={brand}
-          translations={t}
-        />
+        <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_18px_44px_rgba(15,23,42,0.08)]">
+          <KitchenDisplay
+            orders={orders}
+            tables={tables}
+            onUpdateStatus={updateOrderStatus}
+            brand={brand}
+            translations={t}
+          />
+        </div>
       )}
 
       {view === "dashboard" && (
-        <Dashboard
-          orders={orders}
-          brand={brand}
-          translations={t}
-        />
+        <div className="rounded-[28px] border border-slate-200 bg-white shadow-[0_18px_44px_rgba(15,23,42,0.08)]">
+          <Dashboard
+            orders={orders}
+            brand={brand}
+            translations={t}
+          />
+        </div>
       )}
 
       {view === "staff_mgmt" && (
-        <StaffManagement
-          brand={brand}
-          translations={t}
-          currentProfile={profile}
-        />
+        <div className="rounded-[28px] border border-slate-200 bg-white shadow-[0_18px_44px_rgba(15,23,42,0.08)]">
+          <StaffManagement
+            brand={brand}
+            translations={t}
+            currentProfile={profile}
+          />
+        </div>
       )}
 
       {view === "menu" && (
@@ -1299,7 +1431,7 @@ function App() {
                             {t.edit}
                           </button>
                           <button
-                            onClick={() => deleteItem(cat.id, item.id)}
+                            onClick={() => deleteItem(item.id)}
                             style={{
                               padding: "4px 10px",
                               borderRadius: 15,
@@ -1361,7 +1493,7 @@ function App() {
                         fontWeight: 600
                       }}
                     >
-                      <QRCode tableNum={tb.name} size={48} />
+                      <QRCode tableId={tb.id} size={48} />
                       <span>
                         {t.tableLabel} {tb.name}
                       </span>
@@ -1577,6 +1709,7 @@ function App() {
           </div>
         </div>
       )}
+      </main>
         </>
       )}
     </div>

@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import type { User } from '@supabase/supabase-js';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
@@ -41,6 +42,34 @@ export async function getProfile(userId: string) {
     .select('*')
     .eq('id', userId)
     .single();
+  return { data, error };
+}
+
+export async function ensureProfile(user: User) {
+  const fallbackName =
+    typeof user.user_metadata?.full_name === 'string' && user.user_metadata.full_name.trim()
+      ? user.user_metadata.full_name.trim()
+      : user.email || 'User';
+
+  const fallbackRole =
+    typeof user.user_metadata?.role === 'string' && ['admin', 'waiter', 'kitchen', 'cashier'].includes(user.user_metadata.role)
+      ? user.user_metadata.role
+      : 'waiter';
+
+  const { data, error } = await supabase
+    .from('profiles')
+    .upsert(
+      {
+        id: user.id,
+        full_name: fallbackName,
+        role: fallbackRole,
+        updated_at: new Date().toISOString()
+      },
+      { onConflict: 'id' }
+    )
+    .select()
+    .single();
+
   return { data, error };
 }
 
