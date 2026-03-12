@@ -44,7 +44,7 @@ export const translations = {
     close: "Close",
     tableLabel: "Table",
     // Menu View
-    adminTab: "⚙️ Admin",
+    adminTab: "⚙️ Operations",
     menuTab: "🍕 Menu",
     ordersTab: "📋 Orders",
     addToCart: "+ Add",
@@ -170,7 +170,7 @@ export const translations = {
     close: "ပိတ်မည်",
     tableLabel: "စားပွဲ",
     // Menu View
-    adminTab: "⚙️ စီမံခန့်ခွဲမှု",
+    adminTab: "⚙️ လုပ်ငန်းစီမံမှု",
     menuTab: "🍕 မီနူး",
     ordersTab: "📋 အော်ဒါများ",
     addToCart: "+ ထည့်မည်",

@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import type { UserProfile, Brand } from '../types';
+import type { UserProfile, Brand, WorkflowMode } from '../types';
 import { getAllProfiles, updateProfile, type Database } from '../lib/supabase';
 
 interface StaffManagementProps {
   brand: Brand;
   translations: Record<string, string>;
   currentProfile: UserProfile | null;
+  workflowMode: WorkflowMode;
 }
 
 const cardStyle: React.CSSProperties = {
@@ -16,7 +17,7 @@ const cardStyle: React.CSSProperties = {
 
 type ProfileRow = Database['public']['Tables']['profiles']['Row'];
 
-export const StaffManagement: React.FC<StaffManagementProps> = ({ brand, translations: t, currentProfile }) => {
+export const StaffManagement: React.FC<StaffManagementProps> = ({ brand, translations: t, currentProfile, workflowMode }) => {
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -60,7 +61,7 @@ export const StaffManagement: React.FC<StaffManagementProps> = ({ brand, transla
   const roleConfig: Record<UserProfile['role'], { icon: string; color: string; bg: string; label: string }> = {
     admin: { icon: '👑', color: '#92400e', bg: '#fef3c7', label: t.roleAdmin },
     waiter: { icon: '🙋', color: '#1e40af', bg: '#dbeafe', label: t.roleWaiter },
-    kitchen: { icon: '📋', color: '#9d174d', bg: '#fce7f3', label: t.roleKitchen },
+    kitchen: { icon: workflowMode === 'kitchen' ? '👨‍🍳' : '📋', color: '#9d174d', bg: '#fce7f3', label: t.roleKitchen },
     cashier: { icon: '💳', color: '#166534', bg: '#dcfce7', label: t.roleCashier },
   };
 

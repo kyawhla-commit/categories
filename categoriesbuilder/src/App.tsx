@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import type { Category, MenuItem, Language, Brand, Table, Order, CartItem, ViewType, Notification } from './types';
+import { useState, useEffect, useRef, useCallback, useMemo, useId } from 'react';
+import type { Category, MenuItem, Language, Brand, Table, Order, CartItem, ViewType, Notification, WorkflowMode } from './types';
 import { DEFAULT_BRAND, INITIAL_CATEGORIES, INITIAL_TABLES, ROLE_ACCESS } from './constants';
 import { translations } from './translations';
 import { CategoryModalShadcn } from './components/CategoryModalShadcn';
@@ -23,6 +23,7 @@ import {
   fetchCategories, 
   fetchMenuItems, 
   fetchTables, 
+  fetchRestaurantSettings,
   fetchOrders as dbFetchOrders,
   upsertCategory, 
   reorderCategories,
@@ -32,12 +33,14 @@ import {
   deleteMenuItem as dbDeleteMenuItem,
   upsertTable,
   deleteRestaurantTable as dbDeleteTable,
+  upsertRestaurantSettings,
   createOrder as dbCreateOrder,
   updateOrderStatus as dbUpdateOrderStatus,
   markOrdersPaid,
   deleteOrder as dbDeleteOrder,
   type Database
 } from './lib/supabase';
+import { applyWorkflowTranslations, DEFAULT_WORKFLOW_MODE, getEnvWorkflowMode, getNextWorkflowStatus } from './workflows';
 import { playOrderAlert } from './utils/sound';
 import './App.css';
 
@@ -58,7 +61,7 @@ const VIEW_META: Partial<Record<ViewType, { eyebrow: string; title: string; desc
   },
   admin: {
     eyebrow: 'Operations',
-    title: 'Admin',
+    title: 'Operations',
     description: 'Manage categories, menu items, tables, and active orders.',
   },
   kitchen: {
@@ -81,6 +84,7 @@ const VIEW_META: Partial<Record<ViewType, { eyebrow: string; title: string; desc
 type CategoryRow = Database['public']['Tables']['categories']['Row'];
 type MenuItemRow = Database['public']['Tables']['menu_items']['Row'];
 type TableRow = Database['public']['Tables']['restaurant_tables']['Row'];
+type RestaurantSettingsRow = Database['public']['Tables']['restaurant_settings']['Row'];
 type OrderRow = Database['public']['Tables']['orders']['Row'];
 
 const BILLABLE_ORDER_STATUSES: Order['status'][] = ['served'];
@@ -136,6 +140,8 @@ const upsertOrderInState = (currentOrders: Order[], nextOrder: Order) =>
   sortOrders([nextOrder, ...currentOrders.filter((order) => order.id !== nextOrder.id)]);
 
 const isBillableOrder = (order: Order) => BILLABLE_ORDER_STATUSES.includes(order.status);
+const envWorkflowMode = getEnvWorkflowMode();
+const isWorkflowManagedByEnv = envWorkflowMode !== null;
 
 function App() {
   const { user, profile, loading: authLoading } = useAuth();
@@ -152,7 +158,11 @@ function App() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [soundOn, setSoundOn] = useState(true);
   const [dataLoaded, setDataLoaded] = useState(false);
+  const [workflowMode, setWorkflowMode] = useState<WorkflowMode>(envWorkflowMode ?? DEFAULT_WORKFLOW_MODE);
+  const [workflowSaving, setWorkflowSaving] = useState<WorkflowMode | null>(null);
   const prevPendingCount = useRef(0);
+  const tablePickerRef = useRef<HTMLDivElement | null>(null);
+  const tablePickerPanelId = useId();
   
   // Modals
   const [catModal, setCatModal] = useState<Partial<Category> | null>(null);
@@ -162,24 +172,36 @@ function App() {
   const [billModal, setBillModal] = useState<number | null>(null);
   const [confirmModal, setConfirmModal] = useState<{ msg: string; onConfirm: () => void } | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: string } | null>(null);
+  const [tablePickerOpen, setTablePickerOpen] = useState(false);
 
-  const t = translations[lang];
+  const baseTranslations = translations[lang];
+  const t = applyWorkflowTranslations(baseTranslations, lang, workflowMode);
   const scannedTableId = typeof window !== 'undefined'
     ? Number(new URLSearchParams(window.location.search).get('table'))
     : NaN;
   const isCustomerEntry = Number.isFinite(scannedTableId);
   const scannedTable = isCustomerEntry ? tables.find((tb) => tb.id === scannedTableId) : undefined;
   const effectiveSelectedTable = scannedTable?.id ?? selectedTable;
-  const activeTableName = tables.find((tb) => tb.id === effectiveSelectedTable)?.name || String(effectiveSelectedTable);
+  const activeTable = tables.find((tb) => tb.id === effectiveSelectedTable);
+  const hasSelectableTables = tables.length > 0;
+  const activeTableName = activeTable?.name || String(effectiveSelectedTable);
+  const activeTableDescription = activeTable?.desc?.trim();
   const guestCustomerMode = !user && isCustomerEntry;
   const staffPortalLabel = lang === "my" ? "ဝန်ထမ်း ဝင်ရန်" : "Staff Portal";
   const backToMenuLabel = lang === "my" ? "မီနူးသို့ ပြန်မည်" : "Back to Menu";
-  const staffAccessHint = lang === "my"
-    ? "အော်ဒါ၊ ငွေရှင်းနှင့် စီမံခန့်ခွဲမှုအတွက် ဝန်ထမ်းအကောင့်ဖြင့် ဝင်ရောက်ပါ။"
-    : "Use a staff account for orders, cashier, and admin tools.";
+  const staffAccessHint = t.staffAccessHint;
   const customerOrderingHint = lang === "my"
     ? "ဝန်ထမ်း ဝင်ရောက်နေစဉ်အတွင်း ဖောက်သည်မှာယူမှုကို ဆက်လက်အသုံးပြုနိုင်သည်။"
     : "Customer ordering stays open while staff sign in.";
+  const tablePickerTitle = lang === "my" ? "စားပွဲရွေးပါ" : "Choose a table";
+  const tablePickerHint = scannedTable
+    ? (lang === "my" ? "QR ကုဒ်ဖြင့် စားပွဲသတ်မှတ်ထားပါသည်။" : "Locked to the scanned QR table.")
+    : (lang === "my" ? "ဒီအော်ဒါကို ဘယ်စားပွဲသို့ ပို့မလဲ ရွေးပါ။" : "Select where this order should be sent.");
+  const tablePickerDisplayHint = activeTableDescription || tablePickerHint;
+  const tablePickerOptionFallback = lang === "my" ? "မှာယူရန် အသင့်" : "Ready for ordering";
+  const tablePickerSelectedLabel = lang === "my" ? "ရွေးထားသည်" : "Selected";
+  const tablePickerCountLabel = lang === "my" ? `${tables.length} စားပွဲ` : `${tables.length} tables`;
+  const tablePickerEmptyLabel = t.noTables;
   const customerModeLabel = lang === "my"
     ? `${t.tableLabel} ${activeTableName} · ဖောက်သည်`
     : `${t.tableLabel} ${activeTableName} · Customer`;
@@ -197,9 +219,10 @@ function App() {
   const roleIcons = {
     admin: "👑",
     waiter: "🙋",
-    kitchen: "📋",
+    kitchen: workflowMode === 'kitchen' ? "👨‍🍳" : "📋",
     cashier: "💳",
   } as const;
+  const workflowLabel = workflowMode === 'kitchen' ? t.kitchenWorkflow : t.serviceWorkflow;
 
   // Check if user can access current view
   const canAccess = (v: ViewType) => {
@@ -241,10 +264,11 @@ function App() {
   // Load categories and tables from Supabase
   const loadInitialData = useCallback(async () => {
     try {
-      const [{ data: catsData }, { data: tblsData }, { data: itemsData }] = await Promise.all([
+      const [{ data: catsData }, { data: tblsData }, { data: itemsData }, { data: settingsData }] = await Promise.all([
         fetchCategories(),
         fetchTables(),
-        fetchMenuItems()
+        fetchMenuItems(),
+        fetchRestaurantSettings()
       ]);
 
       if (catsData && itemsData) {
@@ -301,6 +325,18 @@ function App() {
           setSelectedTable(mappedTables[0].id);
         }
       }
+
+      if (envWorkflowMode) {
+        setWorkflowMode(envWorkflowMode);
+      } else if (settingsData) {
+        const nextWorkflowMode = (settingsData as RestaurantSettingsRow).workflow_mode === 'kitchen'
+          ? 'kitchen'
+          : DEFAULT_WORKFLOW_MODE;
+        setWorkflowMode(nextWorkflowMode);
+      } else {
+        setWorkflowMode(DEFAULT_WORKFLOW_MODE);
+      }
+
       setDataLoaded(true);
     } catch (err) {
       console.error('Error loading initial data:', err);
@@ -308,7 +344,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!profile || dataLoaded) {
+    if (authLoading || dataLoaded) {
       return;
     }
 
@@ -317,7 +353,45 @@ function App() {
     }, 0);
 
     return () => window.clearTimeout(timerId);
-  }, [profile, dataLoaded, loadInitialData]);
+  }, [authLoading, dataLoaded, loadInitialData]);
+
+  useEffect(() => {
+    if (!tablePickerOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (tablePickerRef.current && !tablePickerRef.current.contains(event.target as Node)) {
+        setTablePickerOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setTablePickerOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [tablePickerOpen]);
+
+  useEffect(() => {
+    if (!scannedTable && resolvedView === 'menu') {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      setTablePickerOpen(false);
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [resolvedView, scannedTable]);
 
   // Load orders from Supabase
   const loadOrders = useCallback(async () => {
@@ -366,6 +440,9 @@ function App() {
         void loadInitialData();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'restaurant_tables' }, () => {
+        void loadInitialData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'restaurant_settings' }, () => {
         void loadInitialData();
       })
       .subscribe();
@@ -433,6 +510,7 @@ function App() {
     setBillModal(null);
     setToast(null);
     setDataLoaded(false);
+    setWorkflowSaving(null);
     prevPendingCount.current = 0;
     setView(isCustomerEntry ? "menu" : "login");
   };
@@ -441,6 +519,32 @@ function App() {
     (tableId: number) => orders.filter((order) => order.table === tableId && isBillableOrder(order)),
     [orders]
   );
+
+  const saveWorkflowMode = async (nextMode: WorkflowMode) => {
+    if (isWorkflowManagedByEnv) {
+      showToast(t.workflowEnvLocked, 'error');
+      return;
+    }
+
+    if (!canManageMenu || workflowSaving || nextMode === workflowMode) {
+      return;
+    }
+
+    setWorkflowSaving(nextMode);
+    const { data, error } = await upsertRestaurantSettings({ workflow_mode: nextMode });
+
+    if (error) {
+      console.error('Error updating workflow mode:', error);
+      showToast(t.workflowSaveFailed, 'error');
+      setWorkflowSaving(null);
+      return;
+    }
+
+    const persistedMode = data?.workflow_mode === 'kitchen' ? 'kitchen' : DEFAULT_WORKFLOW_MODE;
+    setWorkflowMode(persistedMode);
+    showToast(t.workflowSaved);
+    setWorkflowSaving(null);
+  };
 
   // Print receipt function
   const printReceipt = (tableOrders: Order[], tableName: string) => {
@@ -818,7 +922,13 @@ function App() {
     canAccess("staff_mgmt") ? { view: "staff_mgmt" as ViewType, label: t.teamManagement } : null,
   ].filter(Boolean) as Array<{ view: ViewType; label: string }>;
 
-  const currentViewMeta = VIEW_META[resolvedView];
+  const currentViewMeta = resolvedView === "kitchen"
+    ? {
+        eyebrow: t.kitchenViewEyebrow,
+        title: t.kitchenViewTitle,
+        description: t.kitchenViewDescription,
+      }
+    : VIEW_META[resolvedView];
   const activeViewLabel = navItems.find((item) => item.view === resolvedView)?.label ?? currentViewMeta?.title ?? resolvedView;
 
   return (
@@ -854,6 +964,7 @@ function App() {
         <AuthScreenShadcn
           brand={brand}
           translations={t}
+          workflowMode={workflowMode}
           onAuthSuccess={handleAuthSuccess}
           onBack={isCustomerEntry ? () => setView("menu") : undefined}
           backLabel={backToMenuLabel}
@@ -1010,6 +1121,9 @@ function App() {
                   </Badge>
                 )}
                 <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-700">
+                  {workflowLabel}
+                </Badge>
+                <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-700">
                   {activeViewLabel}
                 </Badge>
                 {resolvedView === "menu" && (
@@ -1030,6 +1144,7 @@ function App() {
             onUpdateStatus={updateOrderStatus}
             brand={brand}
             translations={t}
+            workflowMode={workflowMode}
           />
         </div>
       )}
@@ -1050,6 +1165,7 @@ function App() {
             brand={brand}
             translations={t}
             currentProfile={profile}
+            workflowMode={workflowMode}
           />
         </div>
       )}
@@ -1062,22 +1178,90 @@ function App() {
               <p className="menu-hero__eyebrow">{t.welcomeTo}</p>
               <h1 className="menu-hero__title">{brand.name}</h1>
               <p className="menu-hero__subtitle">{brand.tagline}</p>
-              <div className="menu-table-pill">
-              <span style={{ color: brand.accent }}>🪑</span>
-              <span className="menu-table-pill__label">{t.tableLabel}</span>
-              <select
-                value={effectiveSelectedTable}
-                disabled={Boolean(scannedTable)}
-                onChange={(e) => setSelectedTable(Number(e.target.value))}
-                style={{ cursor: scannedTable ? "not-allowed" : "pointer" }}
+              <div
+                ref={tablePickerRef}
+                className={`menu-table-picker ${scannedTable ? "is-locked" : tablePickerOpen ? "is-open" : ""}`}
               >
-                {tables.map((tb) => (
-                  <option key={tb.id} value={tb.id} style={{ color: "#1a1a2e" }}>
-                    {tb.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+                <div className="menu-table-picker__hero">
+                  <div className="menu-table-picker__icon" aria-hidden="true">
+                    <span style={{ color: brand.accent }}>🪑</span>
+                  </div>
+                  <div className="menu-table-picker__copy">
+                    <span className="menu-table-picker__label">{t.tableLabel}</span>
+                    <span className="menu-table-picker__value">{activeTableName}</span>
+                    <span className="menu-table-picker__hint">{tablePickerDisplayHint}</span>
+                  </div>
+                  <div className="menu-table-picker__control">
+                    {scannedTable ? (
+                      <div className="menu-table-picker__locked">
+                        <span className="menu-table-picker__locked-badge">QR</span>
+                        <span className="menu-table-picker__locked-text">{activeTableName}</span>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="menu-table-picker__trigger"
+                        onClick={() => hasSelectableTables && setTablePickerOpen((open) => !open)}
+                        aria-haspopup="dialog"
+                        aria-expanded={tablePickerOpen}
+                        aria-controls={tablePickerPanelId}
+                        aria-label={tablePickerTitle}
+                        disabled={!hasSelectableTables}
+                      >
+                        <span className="menu-table-picker__trigger-copy">
+                          <span className="menu-table-picker__trigger-label">{tablePickerTitle}</span>
+                          <span className="menu-table-picker__trigger-value">
+                            {hasSelectableTables ? activeTableName : tablePickerEmptyLabel}
+                          </span>
+                        </span>
+                        <span className="menu-table-picker__chevron" aria-hidden="true">
+                          {tablePickerOpen ? "▴" : "▾"}
+                        </span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {!scannedTable && tablePickerOpen && (
+                  <div id={tablePickerPanelId} className="menu-table-picker__panel" role="group" aria-label={tablePickerTitle}>
+                    <div className="menu-table-picker__panel-head">
+                      <div>
+                        <p className="menu-table-picker__panel-title">{tablePickerTitle}</p>
+                        <p className="menu-table-picker__panel-subtitle">{tablePickerHint}</p>
+                      </div>
+                      <span className="menu-table-picker__panel-count">{tablePickerCountLabel}</span>
+                    </div>
+                    <div className="menu-table-picker__grid">
+                      {tables.length === 0 ? (
+                        <div className="menu-table-picker__empty">{tablePickerEmptyLabel}</div>
+                      ) : (
+                        tables.map((tb) => {
+                          const isSelected = tb.id === effectiveSelectedTable;
+
+                          return (
+                            <button
+                              key={tb.id}
+                              type="button"
+                              className={`menu-table-picker__option ${isSelected ? "is-selected" : ""}`}
+                              onClick={() => {
+                                setSelectedTable(tb.id);
+                                setTablePickerOpen(false);
+                              }}
+                              aria-pressed={isSelected}
+                            >
+                              <span className="menu-table-picker__option-label">{t.tableLabel}</span>
+                              <span className="menu-table-picker__option-value">{tb.name}</span>
+                              <span className="menu-table-picker__option-desc">{tb.desc || tablePickerOptionFallback}</span>
+                              {isSelected && (
+                                <span className="menu-table-picker__option-badge">{tablePickerSelectedLabel}</span>
+                              )}
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
               {guestCustomerMode && (
                 <div className="menu-hero__actions">
                   <button
@@ -1517,6 +1701,88 @@ function App() {
 
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
               <div style={{ ...cardStyle, padding: 20 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 14 }}>
+                  <div>
+                    <h3 style={{ fontFamily: "Georgia,serif", fontSize: 18, color: "#1a1a2e", marginBottom: 4 }}>
+                      ⚙️ {t.workflowMode}
+                    </h3>
+                    <p style={{ color: "#888", fontSize: 12 }}>
+                      {t.workflowModeDescription}
+                    </p>
+                  </div>
+                  <span
+                    style={{
+                      background: "#f8f4eb",
+                      color: brand.accentDark,
+                      fontSize: 11,
+                      fontWeight: 700,
+                      padding: "5px 10px",
+                      borderRadius: 999
+                    }}
+                  >
+                    {workflowLabel}
+                  </span>
+                </div>
+                <div style={{ display: "grid", gap: 10 }}>
+                  {isWorkflowManagedByEnv && (
+                    <p style={{ margin: 0, color: "#777", fontSize: 12 }}>
+                      {t.workflowEnvHint}
+                    </p>
+                  )}
+                  {[
+                    {
+                      value: "service_only" as WorkflowMode,
+                      icon: "📋",
+                      label: t.serviceWorkflow,
+                      hint: t.serviceWorkflowHint
+                    },
+                    {
+                      value: "kitchen" as WorkflowMode,
+                      icon: "👨‍🍳",
+                      label: t.kitchenWorkflow,
+                      hint: t.kitchenWorkflowHint
+                    }
+                  ].map((option) => {
+                    const isSelected = workflowMode === option.value;
+                    const isSavingOption = workflowSaving === option.value;
+
+                    return (
+                      <button
+                        key={option.value}
+                        disabled={!canManageMenu || Boolean(workflowSaving) || isWorkflowManagedByEnv}
+                        onClick={() => saveWorkflowMode(option.value)}
+                        style={{
+                          textAlign: "left",
+                          padding: "14px 16px",
+                          borderRadius: 18,
+                          border: isSelected ? `2px solid ${brand.accent}` : "1px solid #e5e7eb",
+                          background: isSelected ? "#fffaf1" : "white",
+                          cursor: !canManageMenu || Boolean(workflowSaving) || isWorkflowManagedByEnv ? "not-allowed" : "pointer",
+                          opacity: !canManageMenu || Boolean(workflowSaving) || isWorkflowManagedByEnv ? 0.75 : 1,
+                          transition: "all 0.2s ease"
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                            <span style={{ fontSize: 24 }}>{option.icon}</span>
+                            <div>
+                              <p style={{ fontSize: 14, fontWeight: 700, color: "#1a1a2e", marginBottom: 4 }}>{option.label}</p>
+                              <p style={{ fontSize: 12, color: "#777" }}>{option.hint}</p>
+                            </div>
+                          </div>
+                          {isSelected && (
+                            <span style={{ color: brand.accentDark, fontSize: 11, fontWeight: 700 }}>
+                              {isSavingOption ? `${t.save}...` : "✓"}
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div style={{ ...cardStyle, padding: 20 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
                   <h3 style={{ fontFamily: "Georgia,serif", fontSize: 18, color: "#1a1a2e" }}>🪑 {t.tables}</h3>
                   {canManageMenu && (
@@ -1638,6 +1904,7 @@ function App() {
                   orders.slice(0, 5).map((o) => {
                     const sc = statusConfig[o.status];
                     const billableCount = getBillableOrders(o.table).length;
+                    const nextWorkflowStatus = getNextWorkflowStatus(workflowMode, o.status);
                     return (
                       <div key={o.id} style={{ padding: "10px 0", borderBottom: "1px solid #f5f0e8" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
@@ -1682,9 +1949,9 @@ function App() {
                           </button>
                         </div>
                         <div style={{ display: "flex", gap: 4, marginTop: 6 }}>
-                          {(o.status === "pending" || o.status === "accepted") && canAdvanceOrders && (
+                          {nextWorkflowStatus && canAdvanceOrders && (
                             <button
-                              onClick={() => updateOrderStatus(o.id, "served")}
+                              onClick={() => updateOrderStatus(o.id, nextWorkflowStatus)}
                               style={{
                                 flex: 1,
                                 padding: "5px",

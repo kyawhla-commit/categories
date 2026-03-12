@@ -3,11 +3,12 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { signIn, signUp } from '../lib/supabase';
-import type { Brand } from '../types';
+import type { Brand, WorkflowMode } from '../types';
 
 interface AuthScreenProps {
   brand: Brand;
   translations: Record<string, string>;
+  workflowMode: WorkflowMode;
   onAuthSuccess: () => void;
   onBack?: () => void;
   backLabel?: string;
@@ -18,6 +19,7 @@ interface AuthScreenProps {
 export const AuthScreenShadcn: React.FC<AuthScreenProps> = ({
   brand,
   translations: t,
+  workflowMode,
   onAuthSuccess,
   onBack,
   backLabel = 'Back',
@@ -72,7 +74,7 @@ export const AuthScreenShadcn: React.FC<AuthScreenProps> = ({
   const roleOptions = [
     { value: 'admin' as const, icon: '👑', label: t.roleAdmin || 'Admin' },
     { value: 'waiter' as const, icon: '🙋', label: t.roleWaiter || 'Waiter' },
-    { value: 'kitchen' as const, icon: '📋', label: t.roleKitchen || 'Order Desk' },
+    { value: 'kitchen' as const, icon: workflowMode === 'kitchen' ? '👨‍🍳' : '📋', label: t.roleKitchen || 'Order Desk' },
     { value: 'cashier' as const, icon: '💳', label: t.roleCashier || 'Cashier' },
   ];
 

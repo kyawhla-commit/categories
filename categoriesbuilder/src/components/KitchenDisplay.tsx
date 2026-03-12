@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import type { Order, Table, Brand } from '../types';
+import type { Order, Table, Brand, WorkflowMode } from '../types';
+import { getNextWorkflowStatus } from '../workflows';
 
 interface KitchenDisplayProps {
   orders: Order[];
@@ -7,6 +8,7 @@ interface KitchenDisplayProps {
   onUpdateStatus: (id: number, status: Order['status']) => void;
   brand: Brand;
   translations: Record<string, string>;
+  workflowMode: WorkflowMode;
 }
 
 type OrderBoardFilter = 'open' | 'new' | 'ready';
@@ -19,7 +21,8 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({
   tables,
   onUpdateStatus,
   brand,
-  translations: t
+  translations: t,
+  workflowMode
 }) => {
   const [filter, setFilter] = useState<OrderBoardFilter>('open');
   const [now, setNow] = useState(INITIAL_ORDER_BOARD_NOW);
@@ -98,7 +101,7 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({
                 color: brand.accentDark
               }}
             >
-              Service Desk
+              {t.roleKitchen}
             </p>
             <h1
               style={{
@@ -111,7 +114,7 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({
               {t.kitchenDisplay}
             </h1>
             <p style={{ margin: '10px 0 0', color: '#6b7280', fontSize: 14, maxWidth: 620 }}>
-              New orders can be handed over immediately. Legacy ready orders stay visible until they are served.
+              {t.workflowBoardIntro}
             </p>
           </div>
           <div
@@ -167,6 +170,7 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({
               const minutes = minAgo(order);
               const tableName = tables.find((table) => table.id === order.table)?.name || String(order.table);
               const isNewOrder = order.status === 'pending';
+              const nextStatus = getNextWorkflowStatus(workflowMode, order.status);
               const statusLabel = isNewOrder ? t.newOrder : t.preparing;
               const actionLabel = isNewOrder ? t.acceptOrder : t.markServed;
               return (
@@ -263,27 +267,29 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({
                         </div>
                       ))}
                     </div>
-                    <button
-                      onClick={() => onUpdateStatus(order.id, 'served')}
-                      style={{
-                        width: '100%',
-                        padding: '12px 16px',
-                        borderRadius: 16,
-                        border: 'none',
-                        background: isNewOrder
-                          ? `linear-gradient(135deg, ${brand.accent}, ${brand.accentDark})`
-                          : 'linear-gradient(135deg, #16a34a, #15803d)',
-                        color: '#fff',
-                        fontSize: 13,
-                        fontWeight: 800,
-                        cursor: 'pointer',
-                        boxShadow: isNewOrder
-                          ? '0 12px 24px rgba(193, 127, 78, 0.22)'
-                          : '0 12px 24px rgba(22, 163, 74, 0.18)'
-                      }}
-                    >
-                      {actionLabel}
-                    </button>
+                    {nextStatus && (
+                      <button
+                        onClick={() => onUpdateStatus(order.id, nextStatus)}
+                        style={{
+                          width: '100%',
+                          padding: '12px 16px',
+                          borderRadius: 16,
+                          border: 'none',
+                          background: isNewOrder
+                            ? `linear-gradient(135deg, ${brand.accent}, ${brand.accentDark})`
+                            : 'linear-gradient(135deg, #16a34a, #15803d)',
+                          color: '#fff',
+                          fontSize: 13,
+                          fontWeight: 800,
+                          cursor: 'pointer',
+                          boxShadow: isNewOrder
+                            ? '0 12px 24px rgba(193, 127, 78, 0.22)'
+                            : '0 12px 24px rgba(22, 163, 74, 0.18)'
+                        }}
+                      >
+                        {actionLabel}
+                      </button>
+                    )}
                   </div>
                 </div>
               );

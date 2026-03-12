@@ -80,7 +80,20 @@ CREATE TABLE IF NOT EXISTS restaurant_tables (
 );
 
 -- ============================================================
--- 5. ORDERS TABLE (handles both new and existing tables)
+-- 5. RESTAURANT_SETTINGS TABLE
+-- ============================================================
+CREATE TABLE IF NOT EXISTS restaurant_settings (
+  id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  workflow_mode TEXT NOT NULL DEFAULT 'service_only' CHECK (workflow_mode IN ('service_only', 'kitchen')),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+INSERT INTO restaurant_settings (id, workflow_mode)
+VALUES (1, 'service_only')
+ON CONFLICT (id) DO NOTHING;
+
+-- ============================================================
+-- 6. ORDERS TABLE (handles both new and existing tables)
 -- ============================================================
 
 -- Create if it doesn't exist yet
@@ -116,7 +129,7 @@ CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_created_by ON orders(created_by);
 
 -- ============================================================
--- 6. ROW LEVEL SECURITY POLICIES
+-- 7. ROW LEVEL SECURITY POLICIES
 -- ============================================================
 
 -- Helper function: get current user's role
@@ -217,6 +230,24 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
+-- --- RESTAURANT_SETTINGS ---
+ALTER TABLE restaurant_settings ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+  CREATE POLICY "restaurant_settings_select" ON restaurant_settings FOR SELECT USING (true);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$ BEGIN
+  CREATE POLICY "restaurant_settings_insert" ON restaurant_settings FOR INSERT WITH CHECK (public.get_user_role() = 'admin');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$ BEGIN
+  CREATE POLICY "restaurant_settings_update" ON restaurant_settings FOR UPDATE USING (public.get_user_role() = 'admin');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
 -- --- ORDERS ---
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 
@@ -244,7 +275,7 @@ EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
 -- ============================================================
--- 7. ENABLE REALTIME (safe — ignores if already added)
+-- 8. ENABLE REALTIME (safe — ignores if already added)
 -- ============================================================
 DO $$ BEGIN
   ALTER PUBLICATION supabase_realtime ADD TABLE orders;
@@ -266,8 +297,13 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
+DO $$ BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE restaurant_settings;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
 -- ============================================================
--- 8. SEED DATA
+-- 9. SEED DATA
 -- ============================================================
 
 -- Seed Categories

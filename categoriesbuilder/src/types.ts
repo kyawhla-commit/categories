@@ -72,4 +72,11 @@ export interface UserProfile {
 
 export type Language = 'en' | 'my';
 
+export type WorkflowMode = 'service_only' | 'kitchen';
+
+export interface RestaurantSettings {
+  workflowMode: WorkflowMode;
+  updatedAt?: string;
+}
+
 export type ViewType = 'admin' | 'menu' | 'order-success' | 'kitchen' | 'dashboard' | 'login' | 'staff_mgmt';

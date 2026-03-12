@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import type { User } from '@supabase/supabase-js';
+import type { WorkflowMode } from '../types';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
@@ -203,6 +204,33 @@ export async function deleteRestaurantTable(id: number) {
   return { error };
 }
 
+// ── Restaurant Settings ────────────────────────────────────
+
+export async function fetchRestaurantSettings() {
+  const { data, error } = await supabase
+    .from('restaurant_settings')
+    .select('*')
+    .eq('id', 1)
+    .maybeSingle();
+  return { data, error };
+}
+
+export async function upsertRestaurantSettings(settings: { workflow_mode: WorkflowMode }) {
+  const { data, error } = await supabase
+    .from('restaurant_settings')
+    .upsert(
+      {
+        id: 1,
+        ...settings,
+        updated_at: new Date().toISOString()
+      },
+      { onConflict: 'id' }
+    )
+    .select()
+    .single();
+  return { data, error };
+}
+
 // ── Orders ────────────────────────────────────────────────
 
 export async function fetchOrders() {
@@ -292,6 +320,13 @@ export interface Database {
           description: string;
           is_active: boolean;
           created_at: string;
+        };
+      };
+      restaurant_settings: {
+        Row: {
+          id: number;
+          workflow_mode: string;
+          updated_at: string;
         };
       };
       orders: {
