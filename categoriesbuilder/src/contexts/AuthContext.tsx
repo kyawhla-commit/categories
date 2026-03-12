@@ -19,6 +19,7 @@ const AuthContext = createContext<AuthContextType>({
   refreshProfile: async () => {}
 });
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const useAuth = () => useContext(AuthContext);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -50,7 +51,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     if (data) {
       applyProfile(data);
-      return;
+      return true;
     }
 
     if (error) {
@@ -60,11 +61,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const repaired = await ensureProfile(authUser);
     if (repaired.data) {
       applyProfile(repaired.data);
-      return;
+      return true;
     }
 
     console.error('Unable to load or create profile:', repaired.error?.message || error?.message || 'unknown error');
     setProfile(null);
+    return false;
   }, [applyProfile]);
 
   const refreshProfile = useCallback(async () => {
@@ -75,6 +77,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     let isMounted = true;
+    const resetAuthState = () => {
+      setSession(null);
+      setUser(null);
+      setProfile(null);
+    };
 
     const bootstrapAuth = async () => {
       try {
@@ -83,21 +90,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           return;
         }
 
-        setSession(s);
-        setUser(s?.user ?? null);
-        setLoading(false);
-
         if (s?.user) {
-          void loadProfile(s.user);
+          setSession(s);
+          setUser(s.user);
+          const loaded = await loadProfile(s.user);
+          if (!isMounted) {
+            return;
+          }
+
+          if (!loaded) {
+            await supabase.auth.signOut();
+            if (!isMounted) {
+              return;
+            }
+            resetAuthState();
+          }
         } else {
-          setProfile(null);
+          resetAuthState();
         }
+        setLoading(false);
       } catch (error) {
         console.error('Error restoring auth session:', error);
         if (isMounted) {
-          setSession(null);
-          setUser(null);
-          setProfile(null);
+          resetAuthState();
           setLoading(false);
         }
       }
@@ -108,31 +123,47 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
-        try {
-          if (!isMounted) {
-            return;
-          }
-
-          setSession(session);
-          setUser(session?.user ?? null);
-          setLoading(false);
-
-          if (session?.user) {
-            setTimeout(() => {
-              if (isMounted) {
-                void loadProfile(session.user);
-              }
-            }, 0);
-          } else {
-            setProfile(null);
-          }
-        } catch (error) {
-          console.error('Error handling auth state change:', error);
-          if (isMounted) {
-            setProfile(null);
-            setLoading(false);
-          }
+        if (!isMounted) {
+          return;
         }
+
+        if (!session?.user) {
+          resetAuthState();
+          setLoading(false);
+          return;
+        }
+
+        setSession(session);
+        setUser(session.user);
+        setLoading(true);
+
+        setTimeout(() => {
+          void (async () => {
+            try {
+              const loaded = await loadProfile(session.user);
+              if (!isMounted) {
+                return;
+              }
+
+              if (!loaded) {
+                await supabase.auth.signOut();
+                if (!isMounted) {
+                  return;
+                }
+                resetAuthState();
+              }
+            } catch (error) {
+              console.error('Error handling auth state change:', error);
+              if (isMounted) {
+                resetAuthState();
+              }
+            } finally {
+              if (isMounted) {
+                setLoading(false);
+              }
+            }
+          })();
+        }, 0);
       }
     );
 

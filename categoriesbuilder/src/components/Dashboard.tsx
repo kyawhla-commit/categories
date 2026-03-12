@@ -10,9 +10,10 @@ interface DashboardProps {
 const fmtMMK = (n: number) => "MMK " + Number(n).toLocaleString();
 
 const cardStyle: React.CSSProperties = {
-  background: "white",
-  borderRadius: 16,
-  boxShadow: "0 2px 16px rgba(0,0,0,0.06)"
+  background: "linear-gradient(180deg, rgba(255,255,255,0.96), rgba(250,245,236,0.9))",
+  border: "1px solid rgba(220,206,184,0.72)",
+  borderRadius: 24,
+  boxShadow: "0 22px 54px rgba(15,23,42,0.08)"
 };
 
 type DateRange = 'today' | 'week' | 'month' | 'all';

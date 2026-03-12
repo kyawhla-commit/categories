@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import type { UserProfile, Brand } from '../types';
-import { getAllProfiles, updateProfile } from '../lib/supabase';
+import { getAllProfiles, updateProfile, type Database } from '../lib/supabase';
 
 interface StaffManagementProps {
   brand: Brand;
@@ -14,6 +14,8 @@ const cardStyle: React.CSSProperties = {
   boxShadow: '0 2px 16px rgba(0,0,0,0.06)'
 };
 
+type ProfileRow = Database['public']['Tables']['profiles']['Row'];
+
 export const StaffManagement: React.FC<StaffManagementProps> = ({ brand, translations: t, currentProfile }) => {
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -25,20 +27,24 @@ export const StaffManagement: React.FC<StaffManagementProps> = ({ brand, transla
     setLoading(true);
     const { data } = await getAllProfiles();
     if (data) {
-      setProfiles(data.map((p: any) => ({
-        id: p.id,
-        full_name: p.full_name,
-        role: p.role,
-        avatar_url: p.avatar_url,
-        created_at: p.created_at,
-        updated_at: p.updated_at,
+      setProfiles((data as ProfileRow[]).map((profile) => ({
+        id: profile.id,
+        full_name: profile.full_name,
+        role: profile.role as UserProfile['role'],
+        avatar_url: profile.avatar_url ?? undefined,
+        created_at: profile.created_at,
+        updated_at: profile.updated_at,
       })));
     }
     setLoading(false);
   };
 
   useEffect(() => {
-    loadProfiles();
+    const timerId = window.setTimeout(() => {
+      void loadProfiles();
+    }, 0);
+
+    return () => window.clearTimeout(timerId);
   }, []);
 
   const handleUpdateRole = async (userId: string) => {

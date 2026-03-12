@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type { Category, MenuItem, Language, Brand, Table, Order, CartItem, ViewType, Notification } from './types';
 import { DEFAULT_BRAND, INITIAL_CATEGORIES, INITIAL_TABLES, ROLE_ACCESS } from './constants';
 import { translations } from './translations';
@@ -23,12 +23,20 @@ import {
   fetchCategories, 
   fetchMenuItems, 
   fetchTables, 
+  fetchOrders as dbFetchOrders,
   upsertCategory, 
+  reorderCategories,
   deleteCategory as dbDeleteCategory,
   upsertMenuItem,
+  reorderMenuItems,
   deleteMenuItem as dbDeleteMenuItem,
   upsertTable,
-  deleteRestaurantTable as dbDeleteTable
+  deleteRestaurantTable as dbDeleteTable,
+  createOrder as dbCreateOrder,
+  updateOrderStatus as dbUpdateOrderStatus,
+  markOrdersPaid,
+  deleteOrder as dbDeleteOrder,
+  type Database
 } from './lib/supabase';
 import { playOrderAlert } from './utils/sound';
 import './App.css';
@@ -36,9 +44,10 @@ import './App.css';
 const fmtMMK = (n: number) => "MMK " + Number(n).toLocaleString();
 
 const cardStyle: React.CSSProperties = {
-  background: "white",
-  borderRadius: 12,
-  boxShadow: "0 2px 12px rgba(0,0,0,0.06)"
+  background: "linear-gradient(180deg, rgba(255,255,255,0.96), rgba(250,245,236,0.9))",
+  border: "1px solid rgba(220,206,184,0.72)",
+  borderRadius: 24,
+  boxShadow: "0 22px 54px rgba(15,23,42,0.08)"
 };
 
 const VIEW_META: Partial<Record<ViewType, { eyebrow: string; title: string; description: string }>> = {
@@ -68,6 +77,65 @@ const VIEW_META: Partial<Record<ViewType, { eyebrow: string; title: string; desc
     description: 'Review staff accounts and adjust access roles.',
   },
 };
+
+type CategoryRow = Database['public']['Tables']['categories']['Row'];
+type MenuItemRow = Database['public']['Tables']['menu_items']['Row'];
+type TableRow = Database['public']['Tables']['restaurant_tables']['Row'];
+type OrderRow = Database['public']['Tables']['orders']['Row'];
+
+const BILLABLE_ORDER_STATUSES: Order['status'][] = ['served'];
+
+const mapMenuItemRow = (item: MenuItemRow): MenuItem => ({
+  id: item.id,
+  name: item.name,
+  desc: item.description || '',
+  price: item.price,
+  image: item.image || '🍽️',
+  available: item.available,
+  sortOrder: item.sort_order
+});
+
+const mapCategoryRows = (categories: CategoryRow[], items: MenuItemRow[]): Category[] =>
+  categories.map((category) => ({
+    id: category.id,
+    name: category.name,
+    nameMy: category.name_my || '',
+    icon: category.icon || '🍽️',
+    sortOrder: category.sort_order,
+    items: items
+      .filter((item) => item.category_id === category.id)
+      .map(mapMenuItemRow)
+  }));
+
+const mapTableRow = (table: TableRow): Table => ({
+  id: table.id,
+  name: table.name,
+  desc: table.description || ''
+});
+
+const mapOrderRow = (row: OrderRow): Order => ({
+  id: row.id,
+  table: row.table_id,
+  items: row.items as CartItem[],
+  total: row.total,
+  time: row.time,
+  status: row.status as Order['status'],
+  created_by: row.created_by ?? undefined,
+  created_at: row.created_at
+});
+
+const sortOrders = (allOrders: Order[]) =>
+  [...allOrders].sort((left, right) => {
+    if (left.created_at && right.created_at) {
+      return new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
+    }
+    return right.id - left.id;
+  });
+
+const upsertOrderInState = (currentOrders: Order[], nextOrder: Order) =>
+  sortOrders([nextOrder, ...currentOrders.filter((order) => order.id !== nextOrder.id)]);
+
+const isBillableOrder = (order: Order) => BILLABLE_ORDER_STATUSES.includes(order.status);
 
 function App() {
   const { user, profile, loading: authLoading } = useAuth();
@@ -100,6 +168,26 @@ function App() {
     ? Number(new URLSearchParams(window.location.search).get('table'))
     : NaN;
   const isCustomerEntry = Number.isFinite(scannedTableId);
+  const scannedTable = isCustomerEntry ? tables.find((tb) => tb.id === scannedTableId) : undefined;
+  const effectiveSelectedTable = scannedTable?.id ?? selectedTable;
+  const activeTableName = tables.find((tb) => tb.id === effectiveSelectedTable)?.name || String(effectiveSelectedTable);
+  const guestCustomerMode = !user && isCustomerEntry;
+  const staffPortalLabel = lang === "my" ? "ဝန်ထမ်း ဝင်ရန်" : "Staff Portal";
+  const backToMenuLabel = lang === "my" ? "မီနူးသို့ ပြန်မည်" : "Back to Menu";
+  const staffAccessHint = lang === "my"
+    ? "မီးဖို၊ ငွေရှင်းနှင့် စီမံခန့်ခွဲမှုအတွက် ဝန်ထမ်းအကောင့်ဖြင့် ဝင်ရောက်ပါ။"
+    : "Use a staff account for kitchen, cashier, and admin tools.";
+  const customerOrderingHint = lang === "my"
+    ? "ဝန်ထမ်း ဝင်ရောက်နေစဉ်အတွင်း ဖောက်သည်မှာယူမှုကို ဆက်လက်အသုံးပြုနိုင်သည်။"
+    : "Customer ordering stays open while staff sign in.";
+  const customerModeLabel = lang === "my"
+    ? `${t.tableLabel} ${activeTableName} · ဖောက်သည်`
+    : `${t.tableLabel} ${activeTableName} · Customer`;
+  const defaultRoleView = profile ? ROLE_ACCESS[profile.role]?.[0] ?? 'menu' : 'menu';
+  const canManageMenu = profile?.role === 'admin';
+  const canAdvanceOrders = profile?.role === 'admin' || profile?.role === 'kitchen';
+  const canMarkPaid = profile?.role === 'admin' || profile?.role === 'cashier';
+  const canDeleteOrders = profile?.role === 'admin';
 
   // Check if user can access current view
   const canAccess = (v: ViewType) => {
@@ -108,22 +196,64 @@ function App() {
     return ROLE_ACCESS[profile.role]?.includes(v) || false;
   };
 
+  const resolvedView = useMemo<ViewType>(() => {
+    if (authLoading) {
+      return view;
+    }
+
+    if (!user) {
+      if (isCustomerEntry) {
+        if (view === "login" || view === "order-success") {
+          return view;
+        }
+        return "menu";
+      }
+      return "login";
+    }
+
+    if (!profile) {
+      return "login";
+    }
+
+    if (view === "login") {
+      return defaultRoleView;
+    }
+
+    if (view === "menu" || view === "order-success") {
+      return view;
+    }
+
+    return ROLE_ACCESS[profile.role]?.includes(view) ? view : defaultRoleView;
+  }, [authLoading, defaultRoleView, isCustomerEntry, profile, user, view]);
+
   // Load categories and tables from Supabase
   const loadInitialData = useCallback(async () => {
     try {
-      const { data: catsData } = await fetchCategories();
-      const { data: tblsData } = await fetchTables();
-      const { data: itemsData } = await fetchMenuItems();
+      const [{ data: catsData }, { data: tblsData }, { data: itemsData }] = await Promise.all([
+        fetchCategories(),
+        fetchTables(),
+        fetchMenuItems()
+      ]);
 
       if (catsData && itemsData) {
-        const enrichedCats: Category[] = catsData.map((c: any) => ({
+        const enrichedCats = mapCategoryRows(catsData as CategoryRow[], itemsData as MenuItemRow[]);
+        if (enrichedCats.length > 0) {
+          setCategories(enrichedCats);
+          setActiveCategory((current) =>
+            enrichedCats.some((category) => category.id === current) ? current : enrichedCats[0].id
+          );
+        }
+      }
+
+      if (catsData && itemsData && catsData.length === 0) {
+        const enrichedCats: Category[] = (catsData as CategoryRow[]).map((c) => ({
           id: c.id,
           name: c.name,
           nameMy: c.name_my || '',
           icon: c.icon || '🍽️',
-          items: itemsData
-            .filter((i: any) => i.category_id === c.id)
-            .map((i: any) => ({
+          items: (itemsData as MenuItemRow[])
+            .filter((i) => i.category_id === c.id)
+            .map((i) => ({
               id: i.id,
               name: i.name,
               desc: i.description || '',
@@ -139,7 +269,17 @@ function App() {
       }
 
       if (tblsData) {
-        const mappedTables: Table[] = tblsData.map((t: any) => ({
+        const mappedTables = (tblsData as TableRow[]).map(mapTableRow);
+        if (mappedTables.length > 0) {
+          setTables(mappedTables);
+          setSelectedTable((current) =>
+            mappedTables.some((table) => table.id === current) ? current : mappedTables[0].id
+          );
+        }
+      }
+
+      if (tblsData && tblsData.length === 0) {
+        const mappedTables: Table[] = (tblsData as TableRow[]).map((t) => ({
           id: t.id,
           name: t.name,
           desc: t.description || ''
@@ -155,59 +295,21 @@ function App() {
     }
   }, []);
 
-  // Redirect if user doesn't have access
   useEffect(() => {
-    if (authLoading) return;
-    
-    if (!user && isCustomerEntry && view === "login") {
-      setView("menu");
-    } else if (!user && !isCustomerEntry && view !== "login") {
-      setView("login");
-    } else if (!user && isCustomerEntry && view !== "menu" && view !== "order-success" && view !== "login") {
-      setView("menu");
-    } else if (user && !profile && view === "login") {
-      setView("menu");
-    } else if (profile && view === "login") {
-      const accessible = ROLE_ACCESS[profile.role];
-      if (accessible && accessible.length > 0) {
-        setView(accessible[0]);
-      } else {
-        setView("menu");
-      }
-    } else if (profile && view !== "menu" && view !== "order-success") {
-      const accessible = ROLE_ACCESS[profile.role];
-      if (accessible && !accessible.includes(view)) {
-        if (accessible.length > 0) {
-          setView(accessible[0]);
-        }
-      }
-    }
-    
-    if (profile && !dataLoaded) {
-      loadInitialData();
-    }
-  }, [user, profile, authLoading, view, dataLoaded, loadInitialData, isCustomerEntry]);
-
-  useEffect(() => {
-    if (!isCustomerEntry || tables.length === 0) {
+    if (!profile || dataLoaded) {
       return;
     }
 
-    const matchedTable = tables.find((tb) => tb.id === scannedTableId);
-    if (!matchedTable) {
-      return;
-    }
+    const timerId = window.setTimeout(() => {
+      void loadInitialData();
+    }, 0);
 
-    setSelectedTable(matchedTable.id);
-    setView("menu");
-  }, [isCustomerEntry, scannedTableId, tables]);
+    return () => window.clearTimeout(timerId);
+  }, [profile, dataLoaded, loadInitialData]);
 
   // Load orders from Supabase
-  const loadOrders = async () => {
-    const { data, error } = await supabase
-      .from('orders')
-      .select('*')
-      .order('created_at', { ascending: false });
+  const loadOrders = useCallback(async () => {
+    const { data, error } = await dbFetchOrders();
 
     if (error) {
       console.error('Error loading orders:', error);
@@ -215,61 +317,65 @@ function App() {
     }
 
     if (data) {
-      const loadedOrders: Order[] = data.map((row: any) => ({
-        id: row.id,
-        table: row.table_id,
-        items: row.items as CartItem[],
-        total: row.total,
-        time: row.time,
-        status: row.status as Order['status'],
-        created_by: row.created_by,
-        created_at: row.created_at
-      }));
+      const loadedOrders = sortOrders((data as OrderRow[]).map(mapOrderRow));
+      prevPendingCount.current = loadedOrders.filter((order) => order.status === "pending").length;
       setOrders(loadedOrders);
     }
-  };
+  }, []);
 
   // Supabase real-time subscription
   useEffect(() => {
-    // Subscribe to new orders
-    const channel = supabase
-      .channel('orders')
+    if (!profile) {
+      return;
+    }
+
+    const ordersChannel = supabase
+      .channel(`orders-${profile.id}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'orders' }, (payload) => {
-        const newOrder = payload.new as any;
-        const order: Order = {
-          id: newOrder.id,
-          table: newOrder.table_id,
-          items: newOrder.items as CartItem[],
-          total: newOrder.total,
-          time: newOrder.time,
-          status: newOrder.status as Order['status'],
-          created_by: newOrder.created_by,
-          created_at: newOrder.created_at
-        };
-        setOrders((prev) => [order, ...prev]);
+        const nextOrder = mapOrderRow(payload.new as OrderRow);
+        setOrders((current) => upsertOrderInState(current, nextOrder));
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'orders' }, (payload) => {
-        const updated = payload.new as { id: number; status: string };
-        setOrders((prev) =>
-          prev.map((o) =>
-            o.id === updated.id
-              ? { ...o, status: updated.status as Order['status'] }
-              : o
-          )
-        );
+        const nextOrder = mapOrderRow(payload.new as OrderRow);
+        setOrders((current) => upsertOrderInState(current, nextOrder));
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'orders' }, (payload) => {
+        const deletedOrder = payload.old as Pick<OrderRow, 'id'>;
+        setOrders((current) => current.filter((order) => order.id !== deletedOrder.id));
       })
       .subscribe();
 
-    // Load existing orders
-    loadOrders();
+    const catalogChannel = supabase
+      .channel(`catalog-${profile.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, () => {
+        void loadInitialData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'menu_items' }, () => {
+        void loadInitialData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'restaurant_tables' }, () => {
+        void loadInitialData();
+      })
+      .subscribe();
+
+    const timerId = window.setTimeout(() => {
+      void loadOrders();
+    }, 0);
 
     return () => {
-      supabase.removeChannel(channel);
+      window.clearTimeout(timerId);
+      void supabase.removeChannel(ordersChannel);
+      void supabase.removeChannel(catalogChannel);
     };
-  }, []);
+  }, [loadInitialData, loadOrders, profile]);
 
   // Notification system
   useEffect(() => {
+    if (!profile) {
+      prevPendingCount.current = 0;
+      return;
+    }
+
     const pendingCount = orders.filter((o) => o.status === "pending").length;
     if (pendingCount > prevPendingCount.current) {
       if (soundOn) playOrderAlert();
@@ -277,13 +383,15 @@ function App() {
       if (latest) {
         const tableName = tables.find((tb) => tb.id === latest.table)?.name || latest.table;
         const msg = `🆕 ${t.newOrderAlert} ${t.tableLabel} ${tableName} — ${fmtMMK(latest.total)}`;
-        setNotifications((n) => [{ id: Date.now(), msg, time: new Date().toLocaleTimeString(), read: false }, ...n].slice(0, 50));
-        setToast({ msg, type: "success" });
-        setTimeout(() => setToast(null), 4000);
+        window.setTimeout(() => {
+          setNotifications((n) => [{ id: Date.now(), msg, time: new Date().toLocaleTimeString(), read: false }, ...n].slice(0, 50));
+          setToast({ msg, type: "success" });
+          window.setTimeout(() => setToast(null), 4000);
+        }, 0);
       }
     }
     prevPendingCount.current = pendingCount;
-  }, [orders, soundOn, t, tables]);
+  }, [orders, profile, soundOn, t, tables]);
 
   const showToast = (msg: string, type = "success") => {
     setToast({ msg, type });
@@ -295,13 +403,14 @@ function App() {
   const handleAuthSuccess = async () => {
     const { data: { session } } = await supabase.auth.getSession();
     if (session?.user) {
-      setView("menu");
+      setView("login");
     }
   };
 
   const handleLogout = async () => {
     await signOut();
     setNotifications([]);
+    setOrders([]);
     setOrderPlaced(null);
     setCart([]);
     setConfirmModal(null);
@@ -312,13 +421,22 @@ function App() {
     setBillModal(null);
     setToast(null);
     setDataLoaded(false);
-    setView("login");
+    prevPendingCount.current = 0;
+    setView(isCustomerEntry ? "menu" : "login");
   };
 
+  const getBillableOrders = useCallback(
+    (tableId: number) => orders.filter((order) => order.table === tableId && isBillableOrder(order)),
+    [orders]
+  );
+
   // Print receipt function
-  const printReceipt = (tableId: number) => {
-    const tableOrders = orders.filter((o) => o.table === tableId);
-    const tableName = tables.find((tb) => tb.id === tableId)?.name || String(tableId);
+  const printReceipt = (tableOrders: Order[], tableName: string) => {
+    if (tableOrders.length === 0) {
+      showToast("No served items are ready for billing yet.", "error");
+      return;
+    }
+
     const subtotal = tableOrders.reduce((s, o) => s + o.total, 0);
     const tax = Math.round(subtotal * 0.05);
     const grand = subtotal + tax;
@@ -364,28 +482,40 @@ function App() {
 
   // Mark table as paid
   const markTablePaid = async (tableId: number) => {
-    const tableOrders = orders.filter((o) => o.table === tableId && o.status === "served");
+    const billableOrders = getBillableOrders(tableId);
     
-    // Update all served orders for this table to paid
-    const updates = tableOrders.map(o => 
-      supabase.from('orders').update({ status: 'paid' }).eq('id', o.id)
-    );
+    if (billableOrders.length === 0) {
+      showToast("No served items are ready for payment yet.", "error");
+      return;
+    }
 
-    await Promise.all(updates);
+    const { error } = await markOrdersPaid(billableOrders.map((order) => order.id));
+
+    if (error) {
+      showToast("Failed to record payment", "error");
+      return;
+    }
     
-    setOrders((p) => p.map((o) => (o.table === tableId && o.status === "served" ? { ...o, status: "paid" } : o)));
+    setOrders((current) =>
+      current.map((order) =>
+        billableOrders.some((billableOrder) => billableOrder.id === order.id)
+          ? { ...order, status: "paid" }
+          : order
+      )
+    );
     setBillModal(null);
     showToast("Payment recorded! 💳");
   };
 
   // Category handlers
   const saveCat = async (form: Partial<Category>) => {
+    const existingCategory = form.id ? categories.find((category) => category.id === form.id) : undefined;
     const { error } = await upsertCategory({
       id: form.id || 'cat-' + Date.now(),
       name: form.name || '',
       name_my: form.nameMy || '',
       icon: form.icon || '🍽️',
-      sort_order: categories.length + 1
+      sort_order: existingCategory?.sortOrder ?? form.sortOrder ?? categories.length + 1
     });
 
     if (error) {
@@ -414,18 +544,41 @@ function App() {
     });
   };
 
-  const moveCat = (idx: number, direction: 'up' | 'down') => {
-    setCategories((p) => {
-      const arr = [...p];
-      const newIdx = direction === 'up' ? idx - 1 : idx + 1;
-      if (newIdx < 0 || newIdx >= arr.length) return arr;
-      [arr[idx], arr[newIdx]] = [arr[newIdx], arr[idx]];
-      return arr;
-    });
+  const moveCat = async (idx: number, direction: 'up' | 'down') => {
+    const reorderedCategories = [...categories];
+    const newIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (newIdx < 0 || newIdx >= reorderedCategories.length) return;
+
+    [reorderedCategories[idx], reorderedCategories[newIdx]] = [reorderedCategories[newIdx], reorderedCategories[idx]];
+    setCategories(reorderedCategories.map((category, index) => ({ ...category, sortOrder: index + 1 })));
+
+    const { error } = await reorderCategories(
+      reorderedCategories.map((category, index) => ({
+        id: category.id,
+        name: category.name,
+        name_my: category.nameMy,
+        icon: category.icon,
+        sort_order: index + 1
+      }))
+    );
+
+    if (error) {
+      showToast("Failed to save category order", "error");
+      await loadInitialData();
+      return;
+    }
+
+    showToast("Category order updated");
   };
 
   // Item handlers
   const saveItem = async (catId: string, item: Partial<MenuItem>) => {
+    const category = categories.find((currentCategory) => currentCategory.id === catId);
+    const existingItem = category?.items.find((currentItem) => currentItem.id === item.id);
+    const nextSortOrder = existingItem?.sortOrder
+      ?? item.sortOrder
+      ?? ((category?.items.reduce((maxSortOrder, currentItem) => Math.max(maxSortOrder, currentItem.sortOrder ?? 0), 0) ?? 0) + 1);
+
     const { error } = await upsertMenuItem({
       id: item.id,
       category_id: catId,
@@ -434,7 +587,7 @@ function App() {
       price: item.price || 0,
       image: item.image || '🍽️',
       available: item.available ?? true,
-      sort_order: 0
+      sort_order: nextSortOrder
     });
 
     if (error) {
@@ -444,6 +597,57 @@ function App() {
       setItemModal(null);
       showToast("Item saved!");
     }
+  };
+
+  const moveItem = async (catId: string, itemId: number, direction: 'up' | 'down') => {
+    const category = categories.find((currentCategory) => currentCategory.id === catId);
+    if (!category) {
+      return;
+    }
+
+    const reorderedItems = [...category.items];
+    const currentIndex = reorderedItems.findIndex((item) => item.id === itemId);
+    if (currentIndex === -1) {
+      return;
+    }
+
+    const newIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (newIndex < 0 || newIndex >= reorderedItems.length) {
+      return;
+    }
+
+    [reorderedItems[currentIndex], reorderedItems[newIndex]] = [reorderedItems[newIndex], reorderedItems[currentIndex]];
+    setCategories((currentCategories) =>
+      currentCategories.map((currentCategory) =>
+        currentCategory.id === catId
+          ? {
+              ...currentCategory,
+              items: reorderedItems.map((currentItem, index) => ({ ...currentItem, sortOrder: index + 1 }))
+            }
+          : currentCategory
+      )
+    );
+
+    const { error } = await reorderMenuItems(
+      reorderedItems.map((currentItem, index) => ({
+        id: currentItem.id,
+        category_id: catId,
+        name: currentItem.name,
+        description: currentItem.desc,
+        price: currentItem.price,
+        image: currentItem.image,
+        available: currentItem.available,
+        sort_order: index + 1
+      }))
+    );
+
+    if (error) {
+      showToast("Failed to save item order", "error");
+      await loadInitialData();
+      return;
+    }
+
+    showToast("Item order updated");
   };
 
   const deleteItem = async (itemId: number) => {
@@ -467,7 +671,8 @@ function App() {
       category_id: catId,
       name: item.name,
       description: item.desc,
-      available: !item.available
+      available: !item.available,
+      sort_order: item.sortOrder ?? 0
     });
 
     if (!error) {
@@ -534,20 +739,16 @@ function App() {
   // Order handlers
   const placeOrder = async () => {
     const order = {
-      table_id: selectedTable,
+      table_id: effectiveSelectedTable,
       items: cart,
       total: cartTotal,
       time: new Date().toLocaleTimeString(),
       status: "pending",
-      created_by: user?.id || null
+      created_by: user?.id ?? undefined
     };
 
     // Save to Supabase
-    const { data, error } = await supabase
-      .from('orders')
-      .insert(order)
-      .select()
-      .single();
+    const { data, error } = await dbCreateOrder(order);
 
     if (error) {
       console.error('Error saving order:', error);
@@ -556,17 +757,10 @@ function App() {
     }
 
     if (data) {
-      const savedOrder: Order = {
-        id: data.id,
-        table: data.table_id,
-        items: data.items as CartItem[],
-        total: data.total,
-        time: data.time,
-        status: data.status as Order['status'],
-        created_by: data.created_by,
-        created_at: data.created_at
-      };
-      setOrders((p) => [savedOrder, ...p]);
+      const savedOrder = mapOrderRow(data as OrderRow);
+      if (profile) {
+        setOrders((current) => upsertOrderInState(current, savedOrder));
+      }
       setOrderPlaced(savedOrder);
       setCart([]);
       setView("order-success");
@@ -574,10 +768,7 @@ function App() {
   };
 
   const updateOrderStatus = async (id: number, status: Order['status']) => {
-    const { error } = await supabase
-      .from('orders')
-      .update({ status })
-      .eq('id', id);
+    const { error } = await dbUpdateOrderStatus(id, status);
 
     if (error) {
       console.error('Error updating order:', error);
@@ -589,10 +780,7 @@ function App() {
   };
 
   const deleteOrder = async (id: number) => {
-    const { error } = await supabase
-      .from('orders')
-      .delete()
-      .eq('id', id);
+    const { error } = await dbDeleteOrder(id);
 
     if (error) {
       console.error('Error deleting order:', error);
@@ -618,18 +806,21 @@ function App() {
     canAccess("staff_mgmt") ? { view: "staff_mgmt" as ViewType, label: t.teamManagement } : null,
   ].filter(Boolean) as Array<{ view: ViewType; label: string }>;
 
-  const currentViewMeta = VIEW_META[view];
-  const activeViewLabel = navItems.find((item) => item.view === view)?.label ?? currentViewMeta?.title ?? view;
+  const currentViewMeta = VIEW_META[resolvedView];
+  const activeViewLabel = navItems.find((item) => item.view === resolvedView)?.label ?? currentViewMeta?.title ?? resolvedView;
 
   return (
-    <div className="app-shell" style={{ fontFamily: "system-ui,'Noto Sans Myanmar',sans-serif" }}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Myanmar:wght@400;700&display=swap');
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        ::-webkit-scrollbar { width: 5px; }
-        ::-webkit-scrollbar-thumb { background: ${brand.accent}; border-radius: 3px; }
-      `}</style>
-
+    <div
+      className="app-shell"
+      style={{
+        ["--brand-primary" as string]: brand.primary,
+        ["--brand-accent" as string]: brand.accent,
+        ["--brand-accent-dark" as string]: brand.accentDark,
+      }}
+    >
+      <div className="app-shell__orb app-shell__orb--one" />
+      <div className="app-shell__orb app-shell__orb--two" />
+      <div className="app-shell__orb app-shell__orb--three" />
       {authLoading && (
         <div className="flex min-h-screen items-center justify-center px-6">
           <Card className="w-full max-w-sm border-slate-200 bg-white">
@@ -647,36 +838,25 @@ function App() {
         </div>
       )}
 
-      {!authLoading && view === "login" && (
+      {!authLoading && resolvedView === "login" && (
         <AuthScreenShadcn
           brand={brand}
           translations={t}
           onAuthSuccess={handleAuthSuccess}
+          onBack={isCustomerEntry ? () => setView("menu") : undefined}
+          backLabel={backToMenuLabel}
+          contextLabel={guestCustomerMode ? customerModeLabel : undefined}
+          supportHint={guestCustomerMode ? staffAccessHint : undefined}
         />
       )}
 
-      {!authLoading && view !== "login" && (
+      {!authLoading && resolvedView !== "login" && (
         <>
           {toast && (
-        <div
-          style={{
-            position: "fixed",
-            top: 20,
-            left: "50%",
-            transform: "translateX(-50%)",
-            zIndex: 9999,
-            padding: "12px 24px",
-            borderRadius: 30,
-            fontSize: 14,
-            fontWeight: 600,
-            background: toast.type === "error" ? "#fee2e2" : "#1a1a2e",
-            color: toast.type === "error" ? "#991b1b" : "white",
-            boxShadow: "0 4px 24px rgba(0,0,0,0.2)"
-          }}
-        >
-          {toast.msg}
-        </div>
-      )}
+            <div className={`workspace-toast ${toast.type === "error" ? "workspace-toast--error" : "workspace-toast--success"}`}>
+              {toast.msg}
+            </div>
+          )}
 
       {confirmModal && (
         <ConfirmModal
@@ -724,7 +904,7 @@ function App() {
       )}
 
       {billModal !== null && (() => {
-        const tableOrders = orders.filter((o) => o.table === billModal);
+        const tableOrders = getBillableOrders(billModal);
         const tableName = tables.find((tb) => tb.id === billModal)?.name || String(billModal);
         return tableOrders.length > 0 ? (
           <BillModal
@@ -732,162 +912,66 @@ function App() {
             tableName={tableName}
             onClose={() => setBillModal(null)}
             onMarkPaid={() => markTablePaid(billModal)}
-            onPrintReceipt={() => printReceipt(billModal)}
+            onPrintReceipt={() => printReceipt(tableOrders, tableName)}
             brand={brand}
             translations={t}
           />
         ) : null;
       })()}
 
-      <nav
-        style={{
-          background: brand.primary,
-          padding: "0 16px",
-          height: 60,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          position: "sticky",
-          top: 0,
-          zIndex: 100,
-          boxShadow: "0 2px 20px rgba(0,0,0,0.3)"
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 22 }}>{brand.logo}</span>
-          <div>
-            <p style={{ fontFamily: "Georgia,serif", color: brand.accent, fontSize: 15, fontWeight: 700, lineHeight: 1 }}>
-              {brand.name}
-            </p>
-            <p style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, letterSpacing: 1 }}>
-              RESTAURANT BUILDER
-            </p>
+      <nav className="workspace-nav">
+        <div className="workspace-nav__brand">
+          <span className="workspace-nav__logo">{brand.logo}</span>
+          <div className="workspace-nav__brand-copy">
+            <p className="workspace-nav__title">{brand.name}</p>
+            <p className="workspace-nav__subtitle">Restaurant Builder</p>
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {canAccess("admin") && (
+        <div className="workspace-nav__actions">
+          {navItems.map((item) => (
             <button
-              onClick={() => setView("admin")}
-              style={{
-                padding: "5px 12px",
-                borderRadius: 20,
-                border: "none",
-                cursor: "pointer",
-                fontSize: 12,
-                fontWeight: 600,
-                background: view === "admin" ? "white" : "transparent",
-                color: view === "admin" ? brand.primary : "rgba(255,255,255,0.6)"
-              }}
+              key={item.view}
+              onClick={() => setView(item.view)}
+              className={`workspace-nav__button ${resolvedView === item.view ? "is-active" : ""}`}
             >
-              {t.adminTab}
+              {item.label}
+            </button>
+          ))}
+          {guestCustomerMode && (
+            <button
+              onClick={() => setView("login")}
+              className="workspace-chip-button workspace-chip-button--solid"
+            >
+              {staffPortalLabel}
             </button>
           )}
-          <button
-            onClick={() => setView("menu")}
-            style={{
-              padding: "5px 12px",
-              borderRadius: 20,
-              border: "none",
-              cursor: "pointer",
-              fontSize: 12,
-              fontWeight: 600,
-              background: view === "menu" ? "white" : "transparent",
-              color: view === "menu" ? brand.primary : "rgba(255,255,255,0.6)"
-            }}
-          >
-            {t.menuTab}
-          </button>
-          {canAccess("kitchen") && (
-            <button
-              onClick={() => setView("kitchen")}
-              style={{
-                padding: "5px 12px",
-                borderRadius: 20,
-                border: "none",
-                cursor: "pointer",
-                fontSize: 12,
-                fontWeight: 600,
-                background: view === "kitchen" ? "white" : "transparent",
-                color: view === "kitchen" ? brand.primary : "rgba(255,255,255,0.6)"
-              }}
-            >
-              {t.kitchenTab}
-            </button>
+          {profile && (
+            <NotificationBellShadcn
+              notifications={notifications}
+              soundOn={soundOn}
+              onToggleSound={() => setSoundOn((s) => !s)}
+              onMarkAllRead={() => setNotifications((n) => n.map((x) => ({ ...x, read: true })))}
+              brand={brand}
+              translations={t}
+            />
           )}
-          {canAccess("dashboard") && (
-            <button
-              onClick={() => setView("dashboard")}
-              style={{
-                padding: "5px 12px",
-                borderRadius: 20,
-                border: "none",
-                cursor: "pointer",
-                fontSize: 12,
-                fontWeight: 600,
-                background: view === "dashboard" ? "white" : "transparent",
-                color: view === "dashboard" ? brand.primary : "rgba(255,255,255,0.6)"
-              }}
-            >
-              {t.dashboardTab}
-            </button>
-          )}
-          {canAccess("staff_mgmt") && (
-            <button
-              onClick={() => setView("staff_mgmt")}
-              style={{
-                padding: "5px 12px",
-                borderRadius: 20,
-                border: "none",
-                cursor: "pointer",
-                fontSize: 12,
-                fontWeight: 600,
-                background: view === "staff_mgmt" ? "white" : "transparent",
-                color: view === "staff_mgmt" ? brand.primary : "rgba(255,255,255,0.6)"
-              }}
-            >
-              {t.teamManagement}
-            </button>
-          )}
-          <NotificationBellShadcn
-            notifications={notifications}
-            soundOn={soundOn}
-            onToggleSound={() => setSoundOn((s) => !s)}
-            onMarkAllRead={() => setNotifications((n) => n.map((x) => ({ ...x, read: true })))}
-            brand={brand}
-            translations={t}
-          />
           <button
             onClick={() => setLang((l) => (l === "en" ? "my" : "en"))}
-            style={{
-              padding: "4px 10px",
-              borderRadius: 20,
-              border: `1px solid ${brand.accent}`,
-              background: "transparent",
-              color: brand.accent,
-              cursor: "pointer",
-              fontSize: 11,
-              fontWeight: 700
-            }}
+            className="workspace-chip-button"
           >
             {lang === "en" ? "🇲🇲" : "🇬🇧"}
           </button>
           {profile && (
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4, padding: "4px 10px", borderRadius: 20, background: "rgba(255,255,255,0.08)" }}>
+            <div className="workspace-profile-pill">
               <span style={{ fontSize: 13 }}>
                 {profile.role === "admin" ? "👑" : profile.role === "kitchen" ? "👨‍🍳" : profile.role === "cashier" ? "💳" : "🙋"}
               </span>
-              <span style={{ color: "rgba(255,255,255,0.8)", fontSize: 12, fontWeight: 600, maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <span className="workspace-profile-pill__name">
                 {(profile.full_name || 'User').split(" ")[0]}
               </span>
               <button
                 onClick={handleLogout}
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  color: "rgba(255,255,255,0.35)",
-                  cursor: "pointer",
-                  fontSize: 11
-                }}
+                className="workspace-profile-pill__logout"
               >
                 {t.logout}
               </button>
@@ -896,9 +980,9 @@ function App() {
         </div>
       </nav>
 
-      <main className="mx-auto max-w-[1380px] px-4 py-6 lg:px-6">
-        {currentViewMeta && view !== "order-success" && (
-          <Card className="mb-6 border-slate-200 bg-white/90 shadow-[0_12px_32px_rgba(15,23,42,0.08)]">
+      <main className="workspace-main">
+        {currentViewMeta && resolvedView !== "order-success" && (
+          <Card className="workspace-overview mb-6">
             <CardContent className="flex flex-col gap-3 p-6 lg:flex-row lg:items-end lg:justify-between">
               <div>
                 <p className="text-[11px] font-bold uppercase tracking-[0.28em]" style={{ color: brand.accentDark }}>
@@ -916,9 +1000,9 @@ function App() {
                 <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-700">
                   {activeViewLabel}
                 </Badge>
-                {view === "menu" && (
+                {resolvedView === "menu" && (
                   <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-700">
-                    {t.tableLabel} {tables.find((tb) => tb.id === selectedTable)?.name || selectedTable}
+                    {t.tableLabel} {tables.find((tb) => tb.id === effectiveSelectedTable)?.name || effectiveSelectedTable}
                   </Badge>
                 )}
               </div>
@@ -926,8 +1010,8 @@ function App() {
           </Card>
         )}
 
-      {view === "kitchen" && (
-        <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_18px_44px_rgba(15,23,42,0.08)]">
+      {resolvedView === "kitchen" && (
+        <div className="view-frame fade-in">
           <KitchenDisplay
             orders={orders}
             tables={tables}
@@ -938,8 +1022,8 @@ function App() {
         </div>
       )}
 
-      {view === "dashboard" && (
-        <div className="rounded-[28px] border border-slate-200 bg-white shadow-[0_18px_44px_rgba(15,23,42,0.08)]">
+      {resolvedView === "dashboard" && (
+        <div className="view-frame fade-in">
           <Dashboard
             orders={orders}
             brand={brand}
@@ -948,8 +1032,8 @@ function App() {
         </div>
       )}
 
-      {view === "staff_mgmt" && (
-        <div className="rounded-[28px] border border-slate-200 bg-white shadow-[0_18px_44px_rgba(15,23,42,0.08)]">
+      {resolvedView === "staff_mgmt" && (
+        <div className="view-frame fade-in">
           <StaffManagement
             brand={brand}
             translations={t}
@@ -958,20 +1042,22 @@ function App() {
         </div>
       )}
 
-      {view === "menu" && (
-        <div className="fade-in" style={{ maxWidth: 800, margin: "0 auto", paddingBottom: 120 }}>
-          <div style={{ background: `linear-gradient(135deg,${brand.primary},${brand.primary}dd)`, padding: "36px 24px 28px", textAlign: "center" }}>
-            <div style={{ fontSize: 40, marginBottom: 6 }}>{brand.logo}</div>
-            <p style={{ color: brand.accent, fontSize: 11, letterSpacing: 3, marginBottom: 6 }}>{t.welcomeTo}</p>
-            <h1 style={{ fontFamily: "Georgia,serif", color: "white", fontSize: 28, fontWeight: 700, marginBottom: 4 }}>{brand.name}</h1>
-            <p style={{ color: "rgba(255,255,255,0.45)", fontSize: 13, fontStyle: "italic", marginBottom: 18 }}>{brand.tagline}</p>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 10, background: "rgba(255,255,255,0.1)", borderRadius: 30, padding: "8px 20px" }}>
+      {resolvedView === "menu" && (
+        <div className="menu-view fade-in">
+          <div className="menu-hero" style={{ background: `linear-gradient(135deg, ${brand.primary}, ${brand.accentDark})` }}>
+            <div className="menu-hero__content">
+              <div className="mb-2 text-5xl">{brand.logo}</div>
+              <p className="menu-hero__eyebrow">{t.welcomeTo}</p>
+              <h1 className="menu-hero__title">{brand.name}</h1>
+              <p className="menu-hero__subtitle">{brand.tagline}</p>
+              <div className="menu-table-pill">
               <span style={{ color: brand.accent }}>🪑</span>
-              <span style={{ color: "white", fontSize: 14 }}>{t.tableLabel}</span>
+              <span className="menu-table-pill__label">{t.tableLabel}</span>
               <select
-                value={selectedTable}
+                value={effectiveSelectedTable}
+                disabled={Boolean(scannedTable)}
                 onChange={(e) => setSelectedTable(Number(e.target.value))}
-                style={{ background: "transparent", border: "none", color: brand.accent, fontSize: 16, fontWeight: 700, outline: "none", cursor: "pointer" }}
+                style={{ cursor: scannedTable ? "not-allowed" : "pointer" }}
               >
                 {tables.map((tb) => (
                   <option key={tb.id} value={tb.id} style={{ color: "#1a1a2e" }}>
@@ -980,79 +1066,65 @@ function App() {
                 ))}
               </select>
             </div>
+              {guestCustomerMode && (
+                <div className="menu-hero__actions">
+                  <button
+                    onClick={() => setView("login")}
+                    className="menu-hero__staff-button"
+                  >
+                    {staffPortalLabel}
+                  </button>
+                  <p className="menu-hero__helper">{customerOrderingHint}</p>
+                </div>
+              )}
           </div>
+        </div>
 
-          <div style={{ background: "white", borderBottom: "1px solid #eee", display: "flex", overflowX: "auto", position: "sticky", top: 60, zIndex: 50 }}>
+          <div className="menu-tab-strip">
             {categories.map((cat) => (
               <button
                 key={cat.id}
                 onClick={() => setActiveCategory(cat.id)}
-                style={{
-                  padding: "14px 16px",
-                  border: "none",
-                  background: "transparent",
-                  cursor: "pointer",
-                  fontSize: 13,
-                  fontWeight: activeCategory === cat.id ? 700 : 400,
-                  color: activeCategory === cat.id ? brand.accentDark : "#666",
-                  borderBottom: activeCategory === cat.id ? `2.5px solid ${brand.accent}` : "2.5px solid transparent",
-                  whiteSpace: "nowrap",
-                  transition: "all 0.2s"
-                }}
+                className={`menu-tab ${activeCategory === cat.id ? "is-active" : ""}`}
               >
                 {cat.icon} {getCatName(cat)}
               </button>
             ))}
           </div>
 
-          <div style={{ padding: "20px 16px" }}>
+          <div className="menu-content">
             {categories
               .filter((c) => c.id === activeCategory)
               .map((cat) => (
                 <div key={cat.id}>
-                  <h2 style={{ fontFamily: "Georgia,serif", fontSize: 22, color: "#1a1a2e", marginBottom: 16, paddingBottom: 8, borderBottom: "1px solid #e8e0d0" }}>
+                  <h2 className="menu-section-title">
                     {cat.icon} {getCatName(cat)}
                   </h2>
-                  <div style={{ display: "grid", gap: 12 }}>
+                  <div className="grid gap-3">
                     {cat.items.map((item) => (
                       <div
                         key={item.id}
-                        style={{
-                          ...cardStyle,
-                          padding: "16px 20px",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 16,
-                          opacity: item.available ? 1 : 0.5
-                        }}
+                        className="menu-item-card flex items-center gap-4 rounded-[28px] bg-white/94 p-5"
+                        style={{ opacity: item.available ? 1 : 0.56 }}
                       >
-                        <div style={{ fontSize: 36, minWidth: 48, textAlign: "center" }}>{item.image}</div>
+                        <div className="menu-item-card__media text-center text-4xl" style={{ minWidth: 52 }}>{item.image}</div>
                         <div style={{ flex: 1 }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                            <p style={{ fontWeight: 700, fontSize: 15, color: "#1a1a2e" }}>{item.name}</p>
+                            <p className="text-[15px] font-extrabold text-slate-900">{item.name}</p>
                             {!item.available && (
-                              <span style={{ background: "#fee2e2", color: "#991b1b", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 20 }}>
+                              <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-bold text-rose-700">
                                 {t.unavailable}
                               </span>
                             )}
                           </div>
-                          <p style={{ fontSize: 13, color: "#888", lineHeight: 1.4 }}>{item.desc}</p>
+                          <p className="text-[13px] leading-6 text-stone-500">{item.desc}</p>
                         </div>
-                        <div style={{ textAlign: "right", minWidth: 90 }}>
-                          <p style={{ fontSize: 16, fontWeight: 700, color: brand.accentDark, marginBottom: 8 }}>{fmtMMK(item.price)}</p>
+                        <div className="menu-item-card__aside text-right" style={{ minWidth: 110 }}>
+                          <p className="menu-item-price">{fmtMMK(item.price)}</p>
                           {item.available && (
                             <button
                               onClick={() => addToCart(item)}
-                              style={{
-                                padding: "6px 16px",
-                                borderRadius: 20,
-                                border: "none",
-                                background: `linear-gradient(135deg,${brand.accent},${brand.accentDark})`,
-                                color: "white",
-                                cursor: "pointer",
-                                fontSize: 13,
-                                fontWeight: 700
-                              }}
+                              className="menu-item-action"
                             >
                               {t.addToCart}
                             </button>
@@ -1066,81 +1138,35 @@ function App() {
           </div>
 
           {cart.length > 0 && (
-            <div
-              style={{
-                position: "fixed",
-                bottom: 0,
-                left: 0,
-                right: 0,
-                background: "white",
-                borderTop: "1px solid #eee",
-                padding: "14px 20px",
-                boxShadow: "0 -4px 20px rgba(0,0,0,0.1)",
-                zIndex: 200
-              }}
-            >
-              <div style={{ maxWidth: 800, margin: "0 auto" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                  <p style={{ fontWeight: 700, fontSize: 15 }}>
+            <div className="menu-cart-dock">
+              <div className="menu-cart-dock__inner">
+                <div className="menu-cart-dock__summary">
+                  <p className="text-[15px] font-extrabold text-slate-900">
                     🛒 {cartCount} {cartCount > 1 ? t.items : t.item}
                   </p>
-                  <p style={{ fontWeight: 700, color: brand.accentDark, fontSize: 18 }}>{fmtMMK(cartTotal)}</p>
+                  <p className="text-lg font-extrabold" style={{ color: brand.accentDark }}>{fmtMMK(cartTotal)}</p>
                 </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                <div className="menu-cart-dock__chips">
                   {cart.map((i) => (
-                    <div
-                      key={i.id}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 6,
-                        background: "#faf8f4",
-                        borderRadius: 20,
-                        padding: "4px 12px",
-                        fontSize: 13
-                      }}
-                    >
+                    <div key={i.id} className="menu-cart-chip">
                       <span>{i.image}</span>
                       <span>{i.name}</span>
                       <button
                         onClick={() => updateQty(i.id, -1)}
-                        style={{
-                          background: "#e5e7eb",
-                          border: "none",
-                          borderRadius: "50%",
-                          width: 18,
-                          height: 18,
-                          cursor: "pointer",
-                          fontSize: 11
-                        }}
+                        className="menu-cart-chip__circle"
                       >
                         −
                       </button>
-                      <span style={{ fontWeight: 700 }}>{i.qty}</span>
+                      <span className="menu-cart-chip__qty">{i.qty}</span>
                       <button
                         onClick={() => updateQty(i.id, 1)}
-                        style={{
-                          background: brand.accent,
-                          border: "none",
-                          borderRadius: "50%",
-                          width: 18,
-                          height: 18,
-                          cursor: "pointer",
-                          fontSize: 11,
-                          color: "white"
-                        }}
+                        className="menu-cart-chip__circle menu-cart-chip__circle--accent"
                       >
                         +
                       </button>
                       <button
                         onClick={() => removeFromCart(i.id)}
-                        style={{
-                          background: "none",
-                          border: "none",
-                          cursor: "pointer",
-                          color: "#ccc",
-                          fontSize: 14
-                        }}
+                        className="menu-cart-chip__remove"
                       >
                         ✕
                       </button>
@@ -1149,19 +1175,9 @@ function App() {
                 </div>
                 <button
                   onClick={placeOrder}
-                  style={{
-                    width: "100%",
-                    padding: 14,
-                    borderRadius: 30,
-                    border: "none",
-                    background: `linear-gradient(135deg,${brand.accent},${brand.accentDark})`,
-                    color: "white",
-                    cursor: "pointer",
-                    fontSize: 16,
-                    fontWeight: 700
-                  }}
+                  className="menu-cart-dock__action"
                 >
-                  {t.placeOrder} · {t.tableLabel} {tables.find((tb) => tb.id === selectedTable)?.name || selectedTable}
+                  {t.placeOrder} · {t.tableLabel} {tables.find((tb) => tb.id === effectiveSelectedTable)?.name || effectiveSelectedTable}
                 </button>
               </div>
             </div>
@@ -1169,55 +1185,40 @@ function App() {
         </div>
       )}
 
-      {view === "order-success" && orderPlaced && (
-        <div className="fade-in" style={{ maxWidth: 500, margin: "60px auto", padding: 24, textAlign: "center" }}>
-          <div style={{ ...cardStyle, padding: 48 }}>
-            <div style={{ fontSize: 64, marginBottom: 16 }}>✅</div>
-            <p style={{ fontFamily: "Georgia,serif", fontSize: 26, fontWeight: 700, color: "#1a1a2e", marginBottom: 8 }}>
+      {resolvedView === "order-success" && orderPlaced && (
+        <div className="order-success-view fade-in">
+          <div className="order-success-card p-12 text-center">
+            <div className="mb-4 text-6xl">✅</div>
+            <p className="mb-2 font-serif text-[26px] font-bold text-slate-900">
               {t.orderPlaced}
             </p>
-            <p style={{ color: "#888", marginBottom: 24 }}>
+            <p className="mb-6 text-sm text-stone-500">
               {t.tableLabel} {tables.find((tb) => tb.id === orderPlaced.table)?.name || orderPlaced.table} · {orderPlaced.time}
             </p>
-            <div style={{ background: "#faf8f4", borderRadius: 12, padding: 20, marginBottom: 24, textAlign: "left" }}>
+            <div className="mb-6 rounded-3xl bg-[rgba(247,241,231,0.9)] p-5 text-left">
               {orderPlaced.items.map((i) => (
                 <div
                   key={i.id}
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    padding: "6px 0",
-                    borderBottom: "1px solid #eee",
-                    fontSize: 14
-                  }}
+                  className="flex justify-between border-b border-stone-200 py-1.5 text-sm"
                 >
                   <span>
                     {i.image} {i.name} × {i.qty}
                   </span>
-                  <span style={{ fontWeight: 700, color: brand.accentDark }}>{fmtMMK(i.price * i.qty)}</span>
+                  <span className="font-extrabold" style={{ color: brand.accentDark }}>{fmtMMK(i.price * i.qty)}</span>
                 </div>
               ))}
-              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12, fontWeight: 700, fontSize: 16 }}>
+              <div className="mt-3 flex justify-between text-base font-extrabold">
                 <span>Total</span>
                 <span style={{ color: brand.accentDark }}>{fmtMMK(orderPlaced.total)}</span>
               </div>
             </div>
-            <p style={{ color: "#888", fontSize: 14, marginBottom: 24 }}>{t.yourFoodPrepared}</p>
+            <p className="mb-6 text-sm text-stone-500">{t.yourFoodPrepared}</p>
             <button
               onClick={() => {
                 setView("menu");
                 setOrderPlaced(null);
               }}
-              style={{
-                padding: "12px 32px",
-                borderRadius: 30,
-                border: "none",
-                background: `linear-gradient(135deg,${brand.accent},${brand.accentDark})`,
-                color: "white",
-                cursor: "pointer",
-                fontSize: 15,
-                fontWeight: 700
-              }}
+              className="menu-item-action px-8 py-3 text-[15px]"
             >
               {t.orderMore}
             </button>
@@ -1225,17 +1226,17 @@ function App() {
         </div>
       )}
 
-      {view === "admin" && (
-        <div className="fade-in" style={{ maxWidth: 1100, margin: "0 auto", padding: "24px 16px" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 22 }}>
+      {resolvedView === "admin" && (
+        <div className="admin-view fade-in mx-auto max-w-[1100px] px-4 py-6">
+          <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             {[
               { label: t.tables, value: tables.length, icon: "🪑", bg: "#dbeafe" },
               { label: t.categories, value: categories.length, icon: "📂", bg: "#dcfce7" },
               { label: t.menuItems, value: categories.reduce((s, c) => s + c.items.length, 0), icon: "🍽️", bg: "#fef3c7" },
               { label: t.activeOrders, value: orders.filter((o) => o.status !== "paid").length, icon: "📋", bg: "#fce7f3" }
             ].map((stat) => (
-              <div key={stat.label} style={{ ...cardStyle, padding: "16px 20px", display: "flex", alignItems: "center", gap: 12 }}>
-                <div style={{ background: stat.bg, borderRadius: 10, padding: 10, fontSize: 22 }}>{stat.icon}</div>
+              <div key={stat.label} className="workspace-stat-card flex items-center gap-3 px-5 py-4">
+                <div style={{ background: stat.bg, borderRadius: 14, padding: 12, fontSize: 22 }}>{stat.icon}</div>
                 <div>
                   <p style={{ fontSize: 24, fontWeight: 700, color: "#1a1a2e", lineHeight: 1 }}>{stat.value}</p>
                   <p style={{ color: "#888", fontSize: 12 }}>{stat.label}</p>
@@ -1244,26 +1245,33 @@ function App() {
             ))}
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 20 }}>
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
             <div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
                 <h2 style={{ fontFamily: "Georgia,serif", fontSize: 22, color: "#1a1a2e" }}>{t.manageCats}</h2>
-                <button
-                  onClick={() => setCatModal({})}
-                  style={{
-                    padding: "8px 18px",
-                    borderRadius: 25,
-                    border: "none",
-                    background: brand.primary,
-                    color: "white",
-                    cursor: "pointer",
-                    fontSize: 13,
-                    fontWeight: 700
-                  }}
-                >
-                  {t.addCategory}
-                </button>
+                {canManageMenu && (
+                  <button
+                    onClick={() => setCatModal({})}
+                    style={{
+                      padding: "8px 18px",
+                      borderRadius: 25,
+                      border: "none",
+                      background: brand.primary,
+                      color: "white",
+                      cursor: "pointer",
+                      fontSize: 13,
+                      fontWeight: 700
+                    }}
+                  >
+                    {t.addCategory}
+                  </button>
+                )}
               </div>
+              {!canManageMenu && (
+                <p style={{ marginBottom: 16, color: "#888", fontSize: 13 }}>
+                  Menu and table configuration is admin-only. Cashier access here is read-only for billing support.
+                </p>
+              )}
 
               <div style={{ display: "grid", gap: 10, marginBottom: 32 }}>
                 {categories.map((cat, idx) => (
@@ -1289,30 +1297,30 @@ function App() {
                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                         <div style={{ display: "flex", gap: 4 }}>
                           <button
-                            disabled={idx === 0}
+                            disabled={!canManageMenu || idx === 0}
                             onClick={() => moveCat(idx, "up")}
                             style={{
                               padding: "3px 8px",
                               borderRadius: 8,
                               border: "1px solid rgba(255,255,255,0.2)",
                               background: "rgba(255,255,255,0.1)",
-                              cursor: idx === 0 ? "not-allowed" : "pointer",
-                              color: idx === 0 ? "rgba(255,255,255,0.3)" : "white",
+                              cursor: !canManageMenu || idx === 0 ? "not-allowed" : "pointer",
+                              color: !canManageMenu || idx === 0 ? "rgba(255,255,255,0.3)" : "white",
                               fontSize: 12
                             }}
                           >
                             ↑
                           </button>
                           <button
-                            disabled={idx === categories.length - 1}
+                            disabled={!canManageMenu || idx === categories.length - 1}
                             onClick={() => moveCat(idx, "down")}
                             style={{
                               padding: "3px 8px",
                               borderRadius: 8,
                               border: "1px solid rgba(255,255,255,0.2)",
                               background: "rgba(255,255,255,0.1)",
-                              cursor: idx === categories.length - 1 ? "not-allowed" : "pointer",
-                              color: idx === categories.length - 1 ? "rgba(255,255,255,0.3)" : "white",
+                              cursor: !canManageMenu || idx === categories.length - 1 ? "not-allowed" : "pointer",
+                              color: !canManageMenu || idx === categories.length - 1 ? "rgba(255,255,255,0.3)" : "white",
                               fontSize: 12
                             }}
                           >
@@ -1320,6 +1328,7 @@ function App() {
                           </button>
                         </div>
                         <button
+                          disabled={!canManageMenu}
                           onClick={() => setItemModal({ catId: cat.id, item: {} })}
                           style={{
                             padding: "5px 14px",
@@ -1327,14 +1336,16 @@ function App() {
                             border: "none",
                             background: `linear-gradient(135deg,${brand.accent},${brand.accentDark})`,
                             color: "white",
-                            cursor: "pointer",
+                            cursor: canManageMenu ? "pointer" : "not-allowed",
                             fontSize: 12,
-                            fontWeight: 700
+                            fontWeight: 700,
+                            opacity: canManageMenu ? 1 : 0.5
                           }}
                         >
                           {t.addItem}
                         </button>
                         <button
+                          disabled={!canManageMenu}
                           onClick={() => setCatModal(cat)}
                           style={{
                             padding: "5px 12px",
@@ -1342,13 +1353,15 @@ function App() {
                             border: "1px solid rgba(255,255,255,0.3)",
                             background: "transparent",
                             color: "white",
-                            cursor: "pointer",
-                            fontSize: 11
+                            cursor: canManageMenu ? "pointer" : "not-allowed",
+                            fontSize: 11,
+                            opacity: canManageMenu ? 1 : 0.5
                           }}
                         >
                           {t.edit}
                         </button>
                         <button
+                          disabled={!canManageMenu}
                           onClick={() => deleteCat(cat.id)}
                           style={{
                             padding: "5px 12px",
@@ -1356,8 +1369,9 @@ function App() {
                             border: "1px solid #fca5a5",
                             background: "white",
                             color: "#dc2626",
-                            cursor: "pointer",
-                            fontSize: 11
+                            cursor: canManageMenu ? "pointer" : "not-allowed",
+                            fontSize: 11,
+                            opacity: canManageMenu ? 1 : 0.5
                           }}
                         >
                           {t.del}
@@ -1404,19 +1418,52 @@ function App() {
                         </p>
                         <div style={{ display: "flex", gap: 6 }}>
                           <button
+                            disabled={!canManageMenu}
+                            onClick={() => moveItem(cat.id, item.id, "up")}
+                            style={{
+                              padding: "4px 8px",
+                              borderRadius: 15,
+                              border: "1px solid #ddd",
+                              background: "white",
+                              cursor: canManageMenu ? "pointer" : "not-allowed",
+                              fontSize: 11,
+                              opacity: canManageMenu ? 1 : 0.5
+                            }}
+                          >
+                            ↑
+                          </button>
+                          <button
+                            disabled={!canManageMenu}
+                            onClick={() => moveItem(cat.id, item.id, "down")}
+                            style={{
+                              padding: "4px 8px",
+                              borderRadius: 15,
+                              border: "1px solid #ddd",
+                              background: "white",
+                              cursor: canManageMenu ? "pointer" : "not-allowed",
+                              fontSize: 11,
+                              opacity: canManageMenu ? 1 : 0.5
+                            }}
+                          >
+                            ↓
+                          </button>
+                          <button
+                            disabled={!canManageMenu}
                             onClick={() => toggleAvail(cat.id, item.id)}
                             style={{
                               padding: "4px 10px",
                               borderRadius: 15,
                               border: "1px solid #ddd",
                               background: "white",
-                              cursor: "pointer",
-                              fontSize: 11
+                              cursor: canManageMenu ? "pointer" : "not-allowed",
+                              fontSize: 11,
+                              opacity: canManageMenu ? 1 : 0.5
                             }}
                           >
                             {item.available ? t.disable : t.enable}
                           </button>
                           <button
+                            disabled={!canManageMenu}
                             onClick={() => setItemModal({ catId: cat.id, item })}
                             style={{
                               padding: "4px 10px",
@@ -1424,13 +1471,15 @@ function App() {
                               border: `1px solid ${brand.accent}`,
                               background: "white",
                               color: brand.accentDark,
-                              cursor: "pointer",
-                              fontSize: 11
+                              cursor: canManageMenu ? "pointer" : "not-allowed",
+                              fontSize: 11,
+                              opacity: canManageMenu ? 1 : 0.5
                             }}
                           >
                             {t.edit}
                           </button>
                           <button
+                            disabled={!canManageMenu}
                             onClick={() => deleteItem(item.id)}
                             style={{
                               padding: "4px 10px",
@@ -1438,8 +1487,9 @@ function App() {
                               border: "1px solid #fca5a5",
                               background: "white",
                               color: "#dc2626",
-                              cursor: "pointer",
-                              fontSize: 11
+                              cursor: canManageMenu ? "pointer" : "not-allowed",
+                              fontSize: 11,
+                              opacity: canManageMenu ? 1 : 0.5
                             }}
                           >
                             {t.del}
@@ -1457,21 +1507,23 @@ function App() {
               <div style={{ ...cardStyle, padding: 20 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
                   <h3 style={{ fontFamily: "Georgia,serif", fontSize: 18, color: "#1a1a2e" }}>🪑 {t.tables}</h3>
-                  <button
-                    onClick={() => setTableModal({})}
-                    style={{
-                      padding: "5px 12px",
-                      borderRadius: 20,
-                      border: "none",
-                      background: brand.primary,
-                      color: "white",
-                      cursor: "pointer",
-                      fontSize: 11,
-                      fontWeight: 700
-                    }}
-                  >
-                    {t.addTable}
-                  </button>
+                  {canManageMenu && (
+                    <button
+                      onClick={() => setTableModal({})}
+                      style={{
+                        padding: "5px 12px",
+                        borderRadius: 20,
+                        border: "none",
+                        background: brand.primary,
+                        color: "white",
+                        cursor: "pointer",
+                        fontSize: 11,
+                        fontWeight: 700
+                      }}
+                    >
+                      {t.addTable}
+                    </button>
+                  )}
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, maxHeight: 220, overflowY: "auto" }}>
                   {tables.map((tb) => (
@@ -1516,27 +1568,31 @@ function App() {
                     >
                       <span>{tb.name}</span>
                       <button
+                        disabled={!canManageMenu}
                         onClick={() => setTableModal(tb)}
                         style={{
                           background: "none",
                           border: "none",
-                          cursor: "pointer",
+                          cursor: canManageMenu ? "pointer" : "not-allowed",
                           color: "#666",
                           fontSize: 10,
-                          padding: 2
+                          padding: 2,
+                          opacity: canManageMenu ? 1 : 0.5
                         }}
                       >
                         ✏️
                       </button>
                       <button
+                        disabled={!canManageMenu}
                         onClick={() => deleteTable(tb.id)}
                         style={{
                           background: "none",
                           border: "none",
-                          cursor: "pointer",
+                          cursor: canManageMenu ? "pointer" : "not-allowed",
                           color: "#dc2626",
                           fontSize: 10,
-                          padding: 2
+                          padding: 2,
+                          opacity: canManageMenu ? 1 : 0.5
                         }}
                       >
                         ✕
@@ -1569,6 +1625,7 @@ function App() {
                 ) : (
                   orders.slice(0, 5).map((o) => {
                     const sc = statusConfig[o.status];
+                    const billableCount = getBillableOrders(o.table).length;
                     return (
                       <div key={o.id} style={{ padding: "10px 0", borderBottom: "1px solid #f5f0e8" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
@@ -1594,6 +1651,7 @@ function App() {
                         <p style={{ fontSize: 11, color: "#bbb", marginBottom: 6 }}>🕐 {o.time}</p>
                         <div style={{ display: "flex", gap: 4, marginTop: 6, marginBottom: 6 }}>
                           <button
+                            disabled={billableCount === 0}
                             onClick={() => setBillModal(o.table)}
                             style={{
                               flex: 1,
@@ -1604,14 +1662,15 @@ function App() {
                               color: "#a07840",
                               fontSize: 10,
                               fontWeight: 700,
-                              cursor: "pointer"
+                              cursor: billableCount === 0 ? "not-allowed" : "pointer",
+                              opacity: billableCount === 0 ? 0.5 : 1
                             }}
                           >
                             🧾 {t.generateBill}
                           </button>
                         </div>
                         <div style={{ display: "flex", gap: 4, marginTop: 6 }}>
-                          {o.status === "pending" && (
+                          {o.status === "pending" && canAdvanceOrders && (
                             <button
                               onClick={() => updateOrderStatus(o.id, "accepted")}
                               style={{
@@ -1629,7 +1688,7 @@ function App() {
                               {t.acceptOrder}
                             </button>
                           )}
-                          {o.status === "accepted" && (
+                          {o.status === "accepted" && canAdvanceOrders && (
                             <button
                               onClick={() => updateOrderStatus(o.id, "served")}
                               style={{
@@ -1647,9 +1706,9 @@ function App() {
                               {t.markServed}
                             </button>
                           )}
-                          {o.status === "served" && (
+                          {o.status === "served" && canMarkPaid && (
                             <button
-                              onClick={() => updateOrderStatus(o.id, "paid")}
+                              onClick={() => markTablePaid(o.table)}
                               style={{
                                 flex: 1,
                                 padding: "5px",
@@ -1683,6 +1742,7 @@ function App() {
                             </div>
                           )}
                           <button
+                            disabled={!canDeleteOrders}
                             onClick={() => deleteOrder(o.id)}
                             style={{
                               padding: "5px 8px",
@@ -1691,7 +1751,8 @@ function App() {
                               background: "white",
                               color: "#dc2626",
                               fontSize: 10,
-                              cursor: "pointer"
+                              cursor: canDeleteOrders ? "pointer" : "not-allowed",
+                              opacity: canDeleteOrders ? 1 : 0.5
                             }}
                           >
                             ✕

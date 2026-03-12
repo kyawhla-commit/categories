@@ -13,7 +13,7 @@ export const ROLE_ACCESS: Record<UserProfile['role'], ViewType[]> = {
   admin: ["admin", "kitchen", "dashboard", "menu", "staff_mgmt"],
   waiter: ["menu"],
   kitchen: ["kitchen"],
-  cashier: ["admin", "dashboard", "staff_mgmt"]
+  cashier: ["admin", "dashboard", "menu"]
 };
 
 export const INITIAL_TABLES: Table[] = [

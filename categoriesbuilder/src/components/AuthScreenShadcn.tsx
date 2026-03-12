@@ -9,9 +9,21 @@ interface AuthScreenProps {
   brand: Brand;
   translations: Record<string, string>;
   onAuthSuccess: () => void;
+  onBack?: () => void;
+  backLabel?: string;
+  contextLabel?: string;
+  supportHint?: string;
 }
 
-export const AuthScreenShadcn: React.FC<AuthScreenProps> = ({ brand, translations: t, onAuthSuccess }) => {
+export const AuthScreenShadcn: React.FC<AuthScreenProps> = ({
+  brand,
+  translations: t,
+  onAuthSuccess,
+  onBack,
+  backLabel = 'Back',
+  contextLabel,
+  supportHint
+}) => {
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -79,6 +91,27 @@ export const AuthScreenShadcn: React.FC<AuthScreenProps> = ({ brand, translation
       />
 
       <div className="relative z-10 w-full max-w-md">
+        {(onBack || contextLabel) && (
+          <div className="mb-4 flex items-center justify-between gap-3">
+            {onBack ? (
+              <button
+                type="button"
+                onClick={onBack}
+                className="rounded-full border border-white/14 bg-white/8 px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-white/78 backdrop-blur transition hover:bg-white/12"
+              >
+                ← {backLabel}
+              </button>
+            ) : (
+              <div />
+            )}
+            {contextLabel && (
+              <div className="rounded-full border border-white/14 bg-white/8 px-4 py-2 text-[11px] font-bold uppercase tracking-[0.18em] text-white/70 backdrop-blur">
+                {contextLabel}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="mb-8 text-center">
           <div className="mb-3 animate-pulse text-6xl drop-shadow-[0_6px_24px_rgba(201,169,110,0.35)]">
             {brand.logo}
@@ -114,7 +147,7 @@ export const AuthScreenShadcn: React.FC<AuthScreenProps> = ({ brand, translation
             <CardTitle>{mode === 'login' ? (t.login || 'Sign In') : (t.signUp || 'Create Account')}</CardTitle>
             <CardDescription>
               {mode === 'login'
-                ? 'Secure staff access with Supabase Authentication.'
+                ? (supportHint || 'Secure staff access with Supabase Authentication.')
                 : 'Create a staff account and assign the initial access role.'}
             </CardDescription>
           </CardHeader>

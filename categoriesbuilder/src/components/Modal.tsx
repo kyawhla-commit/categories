@@ -10,11 +10,11 @@ export const Modal: React.FC<ModalProps> = ({ onClose, children, maxWidth = 440 
   return (
     <div
       onClick={onClose}
-      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/55 p-4"
+      className="workspace-modal"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="max-h-[92vh] w-full overflow-y-auto rounded-2xl bg-white p-7 shadow-[0_16px_50px_rgba(15,23,42,0.22)]"
+        className="workspace-modal__panel"
         style={{ maxWidth }}
       >
         {children}

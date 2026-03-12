@@ -110,6 +110,14 @@ export async function upsertCategory(cat: { id: string; name: string; name_my: s
   return { data, error };
 }
 
+export async function reorderCategories(categories: Array<{ id: string; name: string; name_my: string; icon: string; sort_order: number }>) {
+  const { data, error } = await supabase
+    .from('categories')
+    .upsert(categories, { onConflict: 'id' })
+    .select();
+  return { data, error };
+}
+
 export async function deleteCategory(id: string) {
   const { error } = await supabase.from('categories').delete().eq('id', id);
   return { error };
@@ -146,6 +154,23 @@ export async function upsertMenuItem(item: {
     .upsert(item)
     .select()
     .single();
+  return { data, error };
+}
+
+export async function reorderMenuItems(items: Array<{
+  id: number;
+  category_id: string;
+  name: string;
+  description: string;
+  price: number;
+  image: string;
+  available: boolean;
+  sort_order?: number;
+}>) {
+  const { data, error } = await supabase
+    .from('menu_items')
+    .upsert(items)
+    .select();
   return { data, error };
 }
 
@@ -202,6 +227,14 @@ export async function updateOrderStatus(id: number, status: string) {
     .from('orders')
     .update({ status })
     .eq('id', id);
+  return { error };
+}
+
+export async function markOrdersPaid(ids: number[]) {
+  const { error } = await supabase
+    .from('orders')
+    .update({ status: 'paid' })
+    .in('id', ids);
   return { error };
 }
 

@@ -1,6 +1,14 @@
 export function playOrderAlert() {
   try {
-    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const AudioContextCtor =
+      window.AudioContext
+      || (window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+
+    if (!AudioContextCtor) {
+      return;
+    }
+
+    const ctx = new AudioContextCtor();
     // Play a pleasant 4-tone chime
     [523, 659, 784, 1047].forEach((freq, i) => {
       const oscillator = ctx.createOscillator();

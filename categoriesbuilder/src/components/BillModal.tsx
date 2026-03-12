@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import { Modal } from './Modal';
 import type { Order, Brand } from '../types';
 
@@ -26,9 +26,8 @@ export const BillModal: React.FC<BillModalProps> = ({
   const subtotal = tableOrders.reduce((s, o) => s + o.total, 0);
   const tax = Math.round(subtotal * 0.05);
   const grand = subtotal + tax;
-  const allPaid = tableOrders.every((o) => o.status === "paid");
+  const allPaid = tableOrders.every((o) => o.status === 'paid');
 
-  // Merge items from all orders
   const merged = tableOrders.flatMap((o) => o.items).reduce((acc, item) => {
     const existing = acc.find((a) => a.id === item.id);
     if (existing) {
@@ -42,130 +41,90 @@ export const BillModal: React.FC<BillModalProps> = ({
 
   return (
     <Modal onClose={onClose} maxWidth={420}>
-      <div style={{ textAlign: "center", marginBottom: 16 }}>
-        <div style={{ fontSize: 36, marginBottom: 6 }}>🧾</div>
-        <h3 style={{ fontFamily: "Georgia,serif", fontSize: 20, color: "#1a1a2e" }}>
-          {t.billFor} {t.tableLabel} {tableName}
-        </h3>
-      </div>
-      <div style={{ background: "#faf8f4", borderRadius: 10, padding: 16, marginBottom: 16 }}>
-        {merged.map((item, i) => (
-          <div
-            key={i}
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              padding: "6px 0",
-              borderBottom: "1px solid #eee",
-              fontSize: 14
-            }}
-          >
-            <span>
-              {item.image} {item.name} × {item.qty}
-            </span>
-            <span style={{ fontWeight: 600 }}>{fmtMMK(item.sub)}</span>
+      <div className="space-y-5">
+        <div className="text-center">
+          <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-[rgba(199,157,82,0.16)] text-3xl text-slate-900 shadow-inner">
+            🧾
           </div>
-        ))}
-        <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed #ccc" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, marginBottom: 4 }}>
-            <span>{t.subtotal}</span>
-            <span>{fmtMMK(subtotal)}</span>
+          <h3 className="font-serif text-2xl font-bold text-slate-900">
+            {t.billFor} {t.tableLabel} {tableName}
+          </h3>
+          <p className="mt-2 text-xs font-semibold uppercase tracking-[0.24em] text-stone-400">
+            {tableOrders.length} orders ready to settle
+          </p>
+        </div>
+
+        <div className="rounded-[28px] border border-stone-200 bg-[rgba(247,241,231,0.82)] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]">
+          <div className="space-y-2">
+            {merged.map((item) => (
+              <div
+                key={item.id}
+                className="flex items-center justify-between border-b border-stone-200 pb-2 text-sm last:border-b-0 last:pb-0"
+              >
+                <span className="pr-4 text-slate-700">
+                  {item.image} {item.name} x {item.qty}
+                </span>
+                <span className="font-bold text-slate-900">{fmtMMK(item.sub)}</span>
+              </div>
+            ))}
           </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, marginBottom: 8, color: "#888" }}>
-            <span>{t.tax}</span>
-            <span>{fmtMMK(tax)}</span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 17, fontWeight: 700 }}>
-            <span>{t.grandTotal}</span>
-            <span style={{ color: brand.accentDark }}>{fmtMMK(grand)}</span>
+
+          <div className="mt-4 border-t border-dashed border-stone-300 pt-4">
+            <div className="mb-1 flex justify-between text-sm text-slate-600">
+              <span>{t.subtotal}</span>
+              <span>{fmtMMK(subtotal)}</span>
+            </div>
+            <div className="mb-3 flex justify-between text-sm text-stone-400">
+              <span>{t.tax}</span>
+              <span>{fmtMMK(tax)}</span>
+            </div>
+            <div className="flex justify-between text-lg font-extrabold text-slate-900">
+              <span>{t.grandTotal}</span>
+              <span style={{ color: brand.accentDark }}>{fmtMMK(grand)}</span>
+            </div>
           </div>
         </div>
-      </div>
-      {allPaid ? (
-        <div
-          style={{
-            textAlign: "center",
-            padding: "10px",
-            borderRadius: 8,
-            background: "#dcfce7",
-            color: "#166534",
-            fontWeight: 700,
-            fontSize: 16,
-            marginBottom: 14
-          }}
-        >
-          ✅ {t.billPaid}
-        </div>
-      ) : (
-        <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
-          <button
-            onClick={onMarkPaid}
-            style={{
-              flex: 1,
-              padding: "12px",
-              borderRadius: 10,
-              border: "none",
-              background: brand.primary,
-              color: "white",
-              cursor: "pointer",
-              fontSize: 14,
-              fontWeight: 700
-            }}
-          >
-            💳 {t.markPaid}
-          </button>
+
+        {allPaid ? (
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-center text-sm font-bold text-emerald-700">
+            ✅ {t.billPaid}
+          </div>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <button
+              onClick={onMarkPaid}
+              className="rounded-2xl px-4 py-3 text-sm font-bold text-white shadow-[0_16px_32px_rgba(15,23,42,0.16)]"
+              style={{ background: brand.primary }}
+            >
+              💳 {t.markPaid}
+            </button>
+            <button
+              onClick={onPrintReceipt}
+              className="rounded-2xl border px-4 py-3 text-sm font-bold shadow-[0_10px_24px_rgba(199,157,82,0.12)]"
+              style={{ borderColor: `${brand.accent}66`, color: brand.accentDark, background: 'rgba(255,255,255,0.86)' }}
+            >
+              🖨️ {t.printReceipt}
+            </button>
+          </div>
+        )}
+
+        {allPaid && (
           <button
             onClick={onPrintReceipt}
-            style={{
-              flex: 1,
-              padding: "12px",
-              borderRadius: 10,
-              border: "1.5px solid #c9a96e",
-              background: "white",
-              color: "#a07840",
-              cursor: "pointer",
-              fontSize: 14,
-              fontWeight: 700
-            }}
+            className="w-full rounded-2xl px-4 py-3 text-sm font-bold text-white shadow-[0_16px_32px_rgba(15,23,42,0.16)]"
+            style={{ background: brand.primary }}
           >
             🖨️ {t.printReceipt}
           </button>
-        </div>
-      )}
-      {allPaid && (
+        )}
+
         <button
-          onClick={onPrintReceipt}
-          style={{
-            width: "100%",
-            padding: "12px",
-            borderRadius: 10,
-            border: "none",
-            background: brand.primary,
-            color: "white",
-            cursor: "pointer",
-            fontSize: 14,
-            fontWeight: 700,
-            marginBottom: 10
-          }}
+          onClick={onClose}
+          className="w-full rounded-2xl border border-stone-200 bg-white px-4 py-3 text-sm font-semibold text-stone-500"
         >
-          🖨️ {t.printReceipt}
+          {t.close}
         </button>
-      )}
-      <button
-        onClick={onClose}
-        style={{
-          width: "100%",
-          padding: "10px",
-          borderRadius: 8,
-          border: "1.5px solid #ddd",
-          background: "white",
-          cursor: "pointer",
-          fontSize: 14,
-          color: "#666"
-        }}
-      >
-        {t.close}
-      </button>
+      </div>
     </Modal>
   );
 };

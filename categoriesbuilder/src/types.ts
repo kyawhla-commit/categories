@@ -5,6 +5,7 @@ export interface MenuItem {
   price: number;
   image: string;
   available: boolean;
+  sortOrder?: number;
 }
 
 export interface Category {
@@ -13,6 +14,7 @@ export interface Category {
   nameMy: string;
   icon: string;
   items: MenuItem[];
+  sortOrder?: number;
 }
 
 export interface Table {

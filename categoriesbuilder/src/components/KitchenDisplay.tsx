@@ -9,6 +9,8 @@ interface KitchenDisplayProps {
   translations: Record<string, string>;
 }
 
+const INITIAL_KITCHEN_NOW = Date.now();
+
 export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({
   orders,
   tables,
@@ -17,14 +19,17 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({
   translations: t
 }) => {
   const [filter, setFilter] = useState<'active' | 'pending' | 'cooking'>('active');
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(INITIAL_KITCHEN_NOW);
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 30000);
     return () => clearInterval(id);
   }, []);
 
-  const minAgo = (id: number) => Math.max(0, Math.floor((now - id) / 60000));
+  const minAgo = (order: Order) => {
+    const placedAt = order.created_at ? new Date(order.created_at).getTime() : now;
+    return Math.max(0, Math.floor((now - placedAt) / 60000));
+  };
 
   const filtered = orders
     .filter((o) => {
@@ -36,7 +41,7 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({
     .sort((a, b) => a.id - b.id);
 
   const urgency = (o: Order) => {
-    const m = minAgo(o.id);
+    const m = minAgo(o);
     if (m >= 20) return { bg: "#fef2f2", border: "#fca5a5" };
     if (m >= 10) return { bg: "#fffbeb", border: "#fcd34d" };
     return { bg: "#f0fdf4", border: "#86efac" };
@@ -82,7 +87,7 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: 16 }}>
             {filtered.map((o) => {
               const u = urgency(o);
-              const m = minAgo(o.id);
+              const m = minAgo(o);
               const tableName = tables.find((tb) => tb.id === o.table)?.name || o.table;
               return (
                 <div
