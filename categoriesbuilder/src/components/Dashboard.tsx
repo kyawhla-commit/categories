@@ -45,6 +45,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ orders, brand, translation
   const avgOrder = paid.length > 0 ? Math.round(totalRev / paid.length) : 0;
   const pendingCount = filteredOrders.filter((o) => o.status === "pending").length;
   const activeCount = filteredOrders.filter((o) => o.status !== "paid").length;
+  const statusLabels: Record<Order['status'], string> = {
+    pending: t.newOrder || 'New',
+    accepted: t.preparing || 'Ready',
+    served: t.servedUnpaid || 'Served',
+    paid: t.paidOrders || 'Paid'
+  };
 
   // Top dishes
   const dishMap: Record<string, { name: string; image: string; qty: number; revenue: number }> = {};
@@ -164,7 +170,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ orders, brand, translation
             value: fmtMMK(totalRev),
             icon: "💰",
             gradient: `linear-gradient(135deg, #fef9c3, #fef3c7)`,
-            sub: `${paid.length} paid orders`,
+            sub: `${paid.length} settled orders`,
             trend: totalRev > 0 ? '+' + Math.round((totalRev / Math.max(avgOrder, 1)) * 10) + '%' : '—'
           },
           {
@@ -173,8 +179,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ orders, brand, translation
             value: String(filteredOrders.length),
             icon: "📋",
             gradient: `linear-gradient(135deg, #dbeafe, #bfdbfe)`,
-            sub: `${activeCount} active`,
-            trend: filteredOrders.length > 0 ? `${pendingCount} pending` : '—'
+            sub: `${activeCount} open`,
+            trend: filteredOrders.length > 0 ? `${pendingCount} new` : '—'
           },
           {
             key: 'avg',
@@ -291,7 +297,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ orders, brand, translation
             {[
               { label: t.paidOrders || 'Paid', count: paid.length, color: "#22c55e", bg: "#dcfce7", revenue: revenueByStatus.paid },
               { label: t.servedUnpaid || 'Served', count: filteredOrders.filter((o) => o.status === "served").length, color: "#3b82f6", bg: "#dbeafe", revenue: revenueByStatus.served },
-              { label: t.preparing || 'Preparing', count: filteredOrders.filter((o) => o.status === "accepted").length, color: "#f59e0b", bg: "#fef3c7", revenue: revenueByStatus.accepted },
+              { label: t.preparing || 'Ready', count: filteredOrders.filter((o) => o.status === "accepted").length, color: "#f59e0b", bg: "#fef3c7", revenue: revenueByStatus.accepted },
               { label: t.newOrder || 'Pending', count: filteredOrders.filter((o) => o.status === "pending").length, color: "#ef4444", bg: "#fee2e2", revenue: revenueByStatus.pending }
             ].map((s) => {
               const pct = filteredOrders.length > 0 ? Math.round((s.count / filteredOrders.length) * 100) : 0;
@@ -410,7 +416,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ orders, brand, translation
                         fontSize: 11, fontWeight: 700,
                         padding: '3px 10px', borderRadius: 20
                       }}>
-                        {o.status}
+                        {statusLabels[o.status]}
                       </span>
                     </td>
                     <td style={{ padding: '10px 12px', color: '#aaa', fontSize: 12 }}>

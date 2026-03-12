@@ -37,7 +37,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ staff, brand, onLogin,
 
   const roleIcon = (r: Staff['role']) => {
     if (r === "admin") return "👑";
-    if (r === "kitchen") return "👨‍🍳";
+    if (r === "kitchen") return "📋";
     if (r === "cashier") return "💳";
     return "🙋";
   };
@@ -157,7 +157,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ staff, brand, onLogin,
         )}
       </div>
       <p style={{ color: "rgba(255,255,255,0.25)", fontSize: 11, marginTop: 20 }}>
-        Demo PINs: Admin=0000 · Waiter=1111 · Kitchen=2222 · Cashier=3333
+        Demo PINs: Admin=0000 · Waiter=1111 · Order Desk=2222 · Cashier=3333
       </p>
     </div>
   );

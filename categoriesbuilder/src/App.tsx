@@ -62,9 +62,9 @@ const VIEW_META: Partial<Record<ViewType, { eyebrow: string; title: string; desc
     description: 'Manage categories, menu items, tables, and active orders.',
   },
   kitchen: {
-    eyebrow: 'Back Of House',
-    title: 'Kitchen',
-    description: 'Track incoming orders and move them through service quickly.',
+    eyebrow: 'Service',
+    title: 'Orders',
+    description: 'Track incoming orders and mark them served once they are handed over.',
   },
   dashboard: {
     eyebrow: 'Reporting',
@@ -175,8 +175,8 @@ function App() {
   const staffPortalLabel = lang === "my" ? "ဝန်ထမ်း ဝင်ရန်" : "Staff Portal";
   const backToMenuLabel = lang === "my" ? "မီနူးသို့ ပြန်မည်" : "Back to Menu";
   const staffAccessHint = lang === "my"
-    ? "မီးဖို၊ ငွေရှင်းနှင့် စီမံခန့်ခွဲမှုအတွက် ဝန်ထမ်းအကောင့်ဖြင့် ဝင်ရောက်ပါ။"
-    : "Use a staff account for kitchen, cashier, and admin tools.";
+    ? "အော်ဒါ၊ ငွေရှင်းနှင့် စီမံခန့်ခွဲမှုအတွက် ဝန်ထမ်းအကောင့်ဖြင့် ဝင်ရောက်ပါ။"
+    : "Use a staff account for orders, cashier, and admin tools.";
   const customerOrderingHint = lang === "my"
     ? "ဝန်ထမ်း ဝင်ရောက်နေစဉ်အတွင်း ဖောက်သည်မှာယူမှုကို ဆက်လက်အသုံးပြုနိုင်သည်။"
     : "Customer ordering stays open while staff sign in.";
@@ -188,6 +188,18 @@ function App() {
   const canAdvanceOrders = profile?.role === 'admin' || profile?.role === 'kitchen';
   const canMarkPaid = profile?.role === 'admin' || profile?.role === 'cashier';
   const canDeleteOrders = profile?.role === 'admin';
+  const roleLabels = {
+    admin: t.roleAdmin,
+    waiter: t.roleWaiter,
+    kitchen: t.roleKitchen,
+    cashier: t.roleCashier,
+  } as const;
+  const roleIcons = {
+    admin: "👑",
+    waiter: "🙋",
+    kitchen: "📋",
+    cashier: "💳",
+  } as const;
 
   // Check if user can access current view
   const canAccess = (v: ViewType) => {
@@ -964,7 +976,7 @@ function App() {
           {profile && (
             <div className="workspace-profile-pill">
               <span style={{ fontSize: 13 }}>
-                {profile.role === "admin" ? "👑" : profile.role === "kitchen" ? "👨‍🍳" : profile.role === "cashier" ? "💳" : "🙋"}
+                {roleIcons[profile.role]}
               </span>
               <span className="workspace-profile-pill__name">
                 {(profile.full_name || 'User').split(" ")[0]}
@@ -994,7 +1006,7 @@ function App() {
               <div className="flex flex-wrap gap-2">
                 {profile && (
                   <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-800">
-                    {profile.role}
+                    {roleLabels[profile.role]}
                   </Badge>
                 )}
                 <Badge variant="outline" className="border-slate-200 bg-slate-50 text-slate-700">
@@ -1670,25 +1682,7 @@ function App() {
                           </button>
                         </div>
                         <div style={{ display: "flex", gap: 4, marginTop: 6 }}>
-                          {o.status === "pending" && canAdvanceOrders && (
-                            <button
-                              onClick={() => updateOrderStatus(o.id, "accepted")}
-                              style={{
-                                flex: 1,
-                                padding: "5px",
-                                borderRadius: 6,
-                                border: "none",
-                                background: brand.primary,
-                                color: "white",
-                                fontSize: 10,
-                                fontWeight: 700,
-                                cursor: "pointer"
-                              }}
-                            >
-                              {t.acceptOrder}
-                            </button>
-                          )}
-                          {o.status === "accepted" && canAdvanceOrders && (
+                          {(o.status === "pending" || o.status === "accepted") && canAdvanceOrders && (
                             <button
                               onClick={() => updateOrderStatus(o.id, "served")}
                               style={{
@@ -1696,14 +1690,14 @@ function App() {
                                 padding: "5px",
                                 borderRadius: 6,
                                 border: "none",
-                                background: "#16a34a",
+                                background: o.status === "pending" ? brand.primary : "#16a34a",
                                 color: "white",
                                 fontSize: 10,
                                 fontWeight: 700,
                                 cursor: "pointer"
                               }}
                             >
-                              {t.markServed}
+                              {o.status === "pending" ? t.acceptOrder : t.markServed}
                             </button>
                           )}
                           {o.status === "served" && canMarkPaid && (

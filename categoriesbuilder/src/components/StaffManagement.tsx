@@ -20,7 +20,7 @@ export const StaffManagement: React.FC<StaffManagementProps> = ({ brand, transla
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editRole, setEditRole] = useState<string>('');
+  const [editRole, setEditRole] = useState<UserProfile['role'] | ''>('');
   const [toast, setToast] = useState<string | null>(null);
 
   const loadProfiles = async () => {
@@ -57,11 +57,11 @@ export const StaffManagement: React.FC<StaffManagementProps> = ({ brand, transla
     }
   };
 
-  const roleConfig: Record<string, { icon: string; color: string; bg: string }> = {
-    admin: { icon: '👑', color: '#92400e', bg: '#fef3c7' },
-    waiter: { icon: '🙋', color: '#1e40af', bg: '#dbeafe' },
-    kitchen: { icon: '👨‍🍳', color: '#9d174d', bg: '#fce7f3' },
-    cashier: { icon: '💳', color: '#166534', bg: '#dcfce7' },
+  const roleConfig: Record<UserProfile['role'], { icon: string; color: string; bg: string; label: string }> = {
+    admin: { icon: '👑', color: '#92400e', bg: '#fef3c7', label: t.roleAdmin },
+    waiter: { icon: '🙋', color: '#1e40af', bg: '#dbeafe', label: t.roleWaiter },
+    kitchen: { icon: '📋', color: '#9d174d', bg: '#fce7f3', label: t.roleKitchen },
+    cashier: { icon: '💳', color: '#166534', bg: '#dcfce7', label: t.roleCashier },
   };
 
   const isAdmin = currentProfile?.role === 'admin';
@@ -101,7 +101,7 @@ export const StaffManagement: React.FC<StaffManagementProps> = ({ brand, transla
             }}>
               <div style={{ fontSize: 28, marginBottom: 4 }}>{config.icon}</div>
               <p style={{ fontSize: 22, fontWeight: 800, color: '#1a1a2e' }}>{count}</p>
-              <p style={{ fontSize: 12, color: '#888', fontWeight: 600, textTransform: 'capitalize' }}>{role}s</p>
+              <p style={{ fontSize: 12, color: '#888', fontWeight: 600 }}>{config.label}</p>
             </div>
           );
         })}
@@ -174,15 +174,15 @@ export const StaffManagement: React.FC<StaffManagementProps> = ({ brand, transla
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                     <select
                       value={editRole}
-                      onChange={(e) => setEditRole(e.target.value)}
+                      onChange={(e) => setEditRole(e.target.value as UserProfile['role'])}
                       style={{
                         padding: '6px 12px', borderRadius: 8,
                         border: '2px solid #e5e7eb', fontSize: 13,
                         outline: 'none'
                       }}
                     >
-                      {['admin', 'waiter', 'kitchen', 'cashier'].map((r) => (
-                        <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>
+                      {(['admin', 'waiter', 'kitchen', 'cashier'] as UserProfile['role'][]).map((r) => (
+                        <option key={r} value={r}>{roleConfig[r].label}</option>
                       ))}
                     </select>
                     <button
@@ -215,7 +215,7 @@ export const StaffManagement: React.FC<StaffManagementProps> = ({ brand, transla
                       padding: '4px 12px', borderRadius: 20,
                       display: 'flex', alignItems: 'center', gap: 4
                     }}>
-                      {rc.icon} {profile.role}
+                      {rc.icon} {rc.label}
                     </span>
                     {isAdmin && !isSelf && (
                       <button

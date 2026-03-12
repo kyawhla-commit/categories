@@ -56,7 +56,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ brand, translations: t, 
   const roleOptions = [
     { value: 'admin' as const, icon: '👑', label: t.roleAdmin || 'Admin' },
     { value: 'waiter' as const, icon: '🙋', label: t.roleWaiter || 'Waiter' },
-    { value: 'kitchen' as const, icon: '👨‍🍳', label: t.roleKitchen || 'Kitchen' },
+    { value: 'kitchen' as const, icon: '📋', label: t.roleKitchen || 'Order Desk' },
     { value: 'cashier' as const, icon: '💳', label: t.roleCashier || 'Cashier' },
   ];
 
